@@ -1,0 +1,31 @@
+model:
+  backbone: dinov2  # or "bioclip"
+  model_size: base
+  hidden_dim: 256
+  dropout: 0.3
+
+training:
+  loss_type: weighted_bce
+  pos_weight: 20.0
+  optimizer: adamw
+  learning_rate: 0.001
+  weight_decay: 0.01
+  max_epochs: 80
+  batch_size: 16  # ViT needs more memory
+  early_stopping_patience: 10
+  early_stopping_monitor: val/auprc
+  early_stopping_mode: max
+
+linear_probe:
+  freeze_backbone: true
+  max_epochs: 20
+  learning_rate: 0.001
+
+finetune:
+  freeze_backbone: false
+  backbone_lr_factor: 0.01
+
+data:
+  image_size: 384
+  n_folds: 5
+  seed: 42
