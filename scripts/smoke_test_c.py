@@ -105,7 +105,8 @@ def step_train_two_stage(train_meta, val_meta, image_dir, config, output_dir):
     # Transfer learned head weights from probe
     model.head.load_state_dict(probe_model.head.state_dict())
 
-    train_loader, val_loader = _make_loaders(train_meta, val_meta, image_dir, batch_size, num_workers)
+    ft_batch_size = ft_cfg.get("batch_size", batch_size)
+    train_loader, val_loader = _make_loaders(train_meta, val_meta, image_dir, ft_batch_size, num_workers)
 
     ft_dir = output_dir / "finetune"
     ft_dir.mkdir(parents=True, exist_ok=True)

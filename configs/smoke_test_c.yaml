@@ -13,6 +13,7 @@ finetune:
   freeze_backbone: false
   max_epochs: 2
   backbone_lr_factor: 0.01
+  batch_size: 2
 
 training:
   loss_type: weighted_bce
