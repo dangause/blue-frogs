@@ -1,0 +1,16 @@
+.venv/
+.git/
+.worktrees/
+__pycache__/
+*.pyc
+*.egg-info/
+data/
+models/
+results/
+figures/
+wandb/
+*.ckpt
+*.pth
+.pytest_cache/
+htmlcov/
+.ruff_cache/
