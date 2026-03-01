@@ -1,0 +1,46 @@
+# GPU training image for HPC (Apptainer-compatible)
+# Build: docker build -f Dockerfile.gpu -t blue-frogs-gpu .
+# Push:  docker push dangause/blue-frogs-gpu:latest
+# Pull on HPC: apptainer pull ~/containers/blue-frogs-gpu.sif docker://dangause/blue-frogs-gpu:latest
+
+# --- Build stage ---
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    libglib2.0-0 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml .
+COPY src/ src/
+
+# Install project with all extras (bioclip for Model C, yolo for Model B)
+RUN pip install --no-cache-dir ".[bioclip,yolo]"
+
+# --- Runtime stage ---
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy installed packages from builder
+COPY --from=builder /opt/conda/lib/python3.10/site-packages /opt/conda/lib/python3.10/site-packages
+COPY --from=builder /opt/conda/bin /opt/conda/bin
+
+# Copy project files needed at runtime
+COPY src/ src/
+COPY configs/ configs/
+COPY scripts/ scripts/
+
+# Data and results are bind-mounted at runtime
+VOLUME ["/app/data", "/app/results"]
+
+# No ENTRYPOINT — Apptainer calls python directly:
+#   apptainer exec --nv blue-frogs-gpu.sif python scripts/train.py ...
