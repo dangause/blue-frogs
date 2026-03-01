@@ -15,6 +15,7 @@ from blue_frogs.data.dataset import FrogDataset, get_train_transforms, get_val_t
 from blue_frogs.data.splits import get_fold_indices
 from blue_frogs.models.common import make_weighted_sampler
 from blue_frogs.models.model_a import EfficientNetClassifier
+from blue_frogs.models.model_b_classifier import FusionClassifier
 from blue_frogs.models.model_c import FoundationModelClassifier
 
 logging.basicConfig(level=logging.INFO)
@@ -22,8 +23,56 @@ logger = logging.getLogger(__name__)
 
 MODEL_CLASSES = {
     "model_a": EfficientNetClassifier,
+    "model_b": FusionClassifier,
     "model_c": FoundationModelClassifier,
 }
+
+
+def build_model_kwargs(model_name: str, config: dict) -> dict:
+    """Extract model constructor kwargs from config.
+
+    Each model has different config structure, so this maps config sections
+    to the kwargs expected by each model class constructor.
+    """
+    training = config["training"]
+    common_kwargs = {
+        "loss_type": training["loss_type"],
+        "pos_weight": training["pos_weight"],
+        "optimizer": training["optimizer"],
+        "learning_rate": training["learning_rate"],
+        "weight_decay": training.get("weight_decay", 0.0),
+    }
+
+    if model_name == "model_a":
+        model_cfg = config["model"]
+        return {
+            **common_kwargs,
+            "backbone": model_cfg["backbone"],
+            "pretrained": model_cfg["pretrained"],
+            "dropout": model_cfg["dropout"],
+            "freeze_backbone": model_cfg.get("freeze_backbone", False),
+        }
+    elif model_name == "model_b":
+        cls_cfg = config["classifier"]
+        return {
+            **common_kwargs,
+            "backbone": cls_cfg["backbone"],
+            "pretrained": cls_cfg["pretrained"],
+            "color_feature_dim": cls_cfg["color_feature_dim"],
+            "fusion_hidden": cls_cfg["fusion_hidden"],
+            "dropout": cls_cfg["dropout"],
+        }
+    elif model_name == "model_c":
+        model_cfg = config["model"]
+        return {
+            **common_kwargs,
+            "backbone": model_cfg["backbone"],
+            "model_size": model_cfg["model_size"],
+            "hidden_dim": model_cfg["hidden_dim"],
+            "dropout": model_cfg["dropout"],
+        }
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
 
 
 def train_fold(
