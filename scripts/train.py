@@ -137,15 +137,48 @@ def train_fold(
     return checkpoint_cb.best_model_path
 
 
+def load_training_data(
+    labels_file: Path, splits_file: Path
+) -> tuple[list[dict], list[dict]]:
+    """Load metadata and split into train/test sets.
+
+    labels_file: JSON list of {observation_id, photo_id, photo_path, label}
+    splits_file: JSON with {train_indices: [...], test_indices: [...]}
+    """
+    import json
+
+    with open(labels_file) as f:
+        all_metadata = json.load(f)
+    with open(splits_file) as f:
+        splits = json.load(f)
+
+    train_meta = [all_metadata[i] for i in splits["train_indices"]]
+    test_meta = [all_metadata[i] for i in splits["test_indices"]]
+    return train_meta, test_meta
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--model", choices=list(MODEL_CLASSES.keys()), required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--labels-file", type=Path, required=True)
     parser.add_argument("--splits-file", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=MODEL_DIR)
     parser.add_argument("--fold", type=int, default=None, help="Train single fold (for HPC)")
+    parser.add_argument(
+        "--precision", type=str, default="16-mixed",
+        help="Training precision: 16-mixed, bf16-mixed, or 32",
+    )
+    parser.add_argument(
+        "--wandb-offline", action="store_true",
+        help="Run WandB in offline mode (sync logs later)",
+    )
     args = parser.parse_args()
+
+    if args.wandb_offline:
+        import os
+        os.environ["WANDB_MODE"] = "offline"
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
@@ -155,10 +188,58 @@ def main():
     output_dir = args.output_dir / args.model
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load data and splits -- details depend on splits file format
-    # (This is filled in during execution based on actual data)
+    # Load data
+    train_meta, test_meta = load_training_data(args.labels_file, args.splits_file)
     logger.info(f"Training {args.model} with config {args.config}")
+    logger.info(f"Train: {len(train_meta)}, Test: {len(test_meta)}")
     logger.info(f"Output: {output_dir}")
+
+    # Determine folds to train
+    import pandas as pd
+    train_df = pd.DataFrame(train_meta)
+    n_folds = config.get("data", {}).get("n_folds", 5)
+    seed = config.get("data", {}).get("seed", RANDOM_SEED)
+    folds = get_fold_indices(train_df, n_folds=n_folds, seed=seed)
+
+    if args.fold is not None:
+        fold_list = [args.fold]
+    else:
+        fold_list = list(range(n_folds))
+
+    image_dir = args.data_dir / "raw_images"
+    model_kwargs = build_model_kwargs(args.model, config)
+    results = {}
+
+    for fold_idx in fold_list:
+        logger.info(f"--- Fold {fold_idx}/{n_folds - 1} ---")
+        train_idx, val_idx = folds[fold_idx]
+
+        fold_train_meta = [train_meta[i] for i in train_idx]
+        fold_val_meta = [train_meta[i] for i in val_idx]
+
+        train_dataset = FrogDataset(fold_train_meta, image_dir, transform=get_train_transforms())
+        val_dataset = FrogDataset(fold_val_meta, image_dir, transform=get_val_transforms())
+
+        if args.model == "model_c" and "linear_probe" in config:
+            best_path = train_fold_two_stage(
+                model_class, model_kwargs, train_dataset, val_dataset,
+                config, fold_idx, output_dir, args.precision,
+            )
+        else:
+            best_path = train_fold(
+                model_class, model_kwargs, train_dataset, val_dataset,
+                config, fold_idx, output_dir, args.precision,
+            )
+
+        results[fold_idx] = {"best_checkpoint": best_path}
+        logger.info(f"Fold {fold_idx} best checkpoint: {best_path}")
+
+    # Save fold results summary
+    import json
+    summary_path = output_dir / "training_summary.json"
+    with open(summary_path, "w") as f:
+        json.dump(results, f, indent=2, default=str)
+    logger.info(f"Training summary saved to {summary_path}")
 
 
 if __name__ == "__main__":

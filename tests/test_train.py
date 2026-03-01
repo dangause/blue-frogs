@@ -1,7 +1,12 @@
 """Tests for the unified training script."""
 
+import json
+
+import numpy as np
 import pytest
 import yaml
+from pathlib import Path
+from PIL import Image
 
 
 def test_build_model_kwargs_model_a():
@@ -92,3 +97,59 @@ def test_model_classes_contains_all_three():
     assert "model_a" in MODEL_CLASSES
     assert "model_b" in MODEL_CLASSES
     assert "model_c" in MODEL_CLASSES
+
+
+@pytest.fixture
+def synthetic_training_data(tmp_path):
+    """Create a minimal dataset with labels, images, and splits for testing main()."""
+    image_dir = tmp_path / "raw_images"
+    image_dir.mkdir()
+    metadata = []
+    n_positive = 10
+    n_negative = 40
+
+    for i in range(n_positive + n_negative):
+        label = 1 if i < n_positive else 0
+        obs_id = 1000 + i
+        photo_id = 2000 + i
+        obs_dir = image_dir / str(obs_id)
+        obs_dir.mkdir(exist_ok=True)
+        img = Image.new("RGB", (100, 100), color=(50, 100, 200) if label else (0, 128, 0))
+        photo_path = f"{obs_id}/{photo_id}.jpg"
+        img.save(image_dir / photo_path)
+        metadata.append({
+            "observation_id": obs_id,
+            "photo_id": photo_id,
+            "photo_path": photo_path,
+            "label": label,
+        })
+
+    labels_file = tmp_path / "labels.json"
+    labels_file.write_text(json.dumps(metadata))
+
+    rng = np.random.RandomState(42)
+    indices = list(range(len(metadata)))
+    rng.shuffle(indices)
+    test_size = int(0.2 * len(metadata))
+    splits = {
+        "test_indices": indices[:test_size],
+        "train_indices": indices[test_size:],
+    }
+    splits_file = tmp_path / "splits.json"
+    splits_file.write_text(json.dumps(splits))
+
+    return tmp_path, labels_file, splits_file, image_dir
+
+
+def test_load_training_data(synthetic_training_data):
+    """load_training_data returns train_meta and test_meta with expected columns."""
+    from scripts.train import load_training_data
+
+    data_dir, labels_file, splits_file, image_dir = synthetic_training_data
+    train_meta, test_meta = load_training_data(labels_file, splits_file)
+
+    assert len(train_meta) > 0
+    assert len(test_meta) > 0
+    assert len(train_meta) + len(test_meta) == 50
+    assert all("label" in m for m in train_meta)
+    assert all("photo_path" in m for m in train_meta)
