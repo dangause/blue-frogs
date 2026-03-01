@@ -83,6 +83,7 @@ def train_fold(
     config: dict,
     fold: int,
     output_dir: Path,
+    precision: str = "16-mixed",
 ):
     """Train a single fold."""
     pl.seed_everything(RANDOM_SEED + fold)
@@ -92,23 +93,25 @@ def train_fold(
     train_labels = [m["label"] for m in train_dataset.metadata]
     sampler = make_weighted_sampler(train_labels)
 
+    num_workers = config["training"].get("num_workers", 4)
     train_loader = DataLoader(
         train_dataset,
         batch_size=config["training"]["batch_size"],
         sampler=sampler,
-        num_workers=4,
+        num_workers=num_workers,
         pin_memory=True,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config["training"]["batch_size"],
         shuffle=False,
-        num_workers=4,
+        num_workers=num_workers,
         pin_memory=True,
     )
 
+    fold_dir = output_dir / f"fold_{fold}"
     checkpoint_cb = ModelCheckpoint(
-        dirpath=output_dir / f"fold_{fold}",
+        dirpath=fold_dir,
         filename="best-{val/auprc:.4f}",
         monitor="val/auprc",
         mode="max",
@@ -128,11 +131,119 @@ def train_fold(
     trainer = pl.Trainer(
         max_epochs=config["training"]["max_epochs"],
         accelerator="auto",
+        precision=precision,
         callbacks=[checkpoint_cb, early_stop_cb],
         logger=wandb_logger,
         deterministic=True,
     )
     trainer.fit(model, train_loader, val_loader)
+
+    return checkpoint_cb.best_model_path
+
+
+def train_fold_two_stage(
+    model_class,
+    model_kwargs: dict,
+    train_dataset: FrogDataset,
+    val_dataset: FrogDataset,
+    config: dict,
+    fold: int,
+    output_dir: Path,
+    precision: str = "16-mixed",
+):
+    """Train Model C in two stages: linear probe (frozen) then fine-tune (unfrozen)."""
+    pl.seed_everything(RANDOM_SEED + fold)
+
+    num_workers = config["training"].get("num_workers", 4)
+    batch_size = config["training"]["batch_size"]
+    fold_dir = output_dir / f"fold_{fold}"
+
+    # --- Stage 1: Linear probe (frozen backbone) ---
+    logger.info(f"Fold {fold} — Stage 1: Linear Probe (frozen backbone)")
+    probe_cfg = config["linear_probe"]
+
+    probe_kwargs = {
+        **model_kwargs,
+        "freeze_backbone": True,
+        "learning_rate": probe_cfg["learning_rate"],
+    }
+    model = model_class(**probe_kwargs)
+
+    train_labels = [m["label"] for m in train_dataset.metadata]
+    sampler = make_weighted_sampler(train_labels)
+
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, sampler=sampler,
+        num_workers=num_workers, pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
+    )
+
+    probe_dir = fold_dir / "linear_probe"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_cb = ModelCheckpoint(
+        dirpath=probe_dir, filename="best-{val/auprc:.4f}",
+        monitor="val/auprc", mode="max", save_top_k=1,
+    )
+    wandb_logger = WandbLogger(
+        project="blue-frogs",
+        name=f"{config.get('model_name', 'model')}_fold{fold}_probe",
+        save_dir=str(output_dir),
+    )
+
+    trainer = pl.Trainer(
+        max_epochs=probe_cfg["max_epochs"], accelerator="auto", precision=precision,
+        callbacks=[checkpoint_cb], logger=wandb_logger, deterministic=True,
+    )
+    trainer.fit(model, train_loader, val_loader)
+    probe_ckpt = checkpoint_cb.best_model_path
+    logger.info(f"Linear probe complete. Best: {probe_ckpt}")
+
+    # --- Stage 2: Fine-tune (unfrozen backbone, differential LR) ---
+    logger.info(f"Fold {fold} — Stage 2: Fine-tune (unfrozen backbone)")
+    ft_cfg = config["finetune"]
+
+    probe_model = model_class.load_from_checkpoint(probe_ckpt)
+    ft_kwargs = {**model_kwargs, "freeze_backbone": False}
+    model = model_class(**ft_kwargs)
+    model.head.load_state_dict(probe_model.head.state_dict())
+
+    ft_batch_size = ft_cfg.get("batch_size", batch_size)
+    train_loader = DataLoader(
+        train_dataset, batch_size=ft_batch_size, sampler=sampler,
+        num_workers=num_workers, pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=ft_batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=True,
+    )
+
+    ft_dir = fold_dir / "finetune"
+    ft_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_cb = ModelCheckpoint(
+        dirpath=ft_dir, filename="best-{val/auprc:.4f}",
+        monitor="val/auprc", mode="max", save_top_k=1,
+    )
+    early_stop_cb = EarlyStopping(
+        monitor="val/auprc", mode="max",
+        patience=config["training"]["early_stopping_patience"],
+    )
+    wandb_logger = WandbLogger(
+        project="blue-frogs",
+        name=f"{config.get('model_name', 'model')}_fold{fold}_finetune",
+        save_dir=str(output_dir),
+    )
+
+    trainer = pl.Trainer(
+        max_epochs=ft_cfg.get("max_epochs", config["training"]["max_epochs"]),
+        accelerator="auto", precision=precision,
+        callbacks=[checkpoint_cb, early_stop_cb], logger=wandb_logger,
+        deterministic=True,
+    )
+    trainer.fit(model, train_loader, val_loader)
+    logger.info(f"Fine-tune complete. Best: {checkpoint_cb.best_model_path}")
 
     return checkpoint_cb.best_model_path
 

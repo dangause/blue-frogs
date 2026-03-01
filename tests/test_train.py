@@ -1,5 +1,6 @@
 """Tests for the unified training script."""
 
+import inspect
 import json
 
 import numpy as np
@@ -153,3 +154,18 @@ def test_load_training_data(synthetic_training_data):
     assert len(train_meta) + len(test_meta) == 50
     assert all("label" in m for m in train_meta)
     assert all("photo_path" in m for m in train_meta)
+
+
+def test_train_fold_accepts_precision():
+    """train_fold accepts a precision parameter."""
+    from scripts.train import train_fold
+    sig = inspect.signature(train_fold)
+    assert "precision" in sig.parameters
+
+
+def test_train_fold_two_stage_exists():
+    """train_fold_two_stage function exists and has expected parameters."""
+    from scripts.train import train_fold_two_stage
+    sig = inspect.signature(train_fold_two_stage)
+    assert "precision" in sig.parameters
+    assert "config" in sig.parameters
