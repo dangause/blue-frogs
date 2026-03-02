@@ -169,3 +169,18 @@ def test_train_fold_two_stage_exists():
     sig = inspect.signature(train_fold_two_stage)
     assert "precision" in sig.parameters
     assert "config" in sig.parameters
+
+
+def test_save_test_predictions_creates_file(tmp_path):
+    """save_test_predictions writes y_true and y_score to JSON."""
+    from scripts.train import save_test_predictions
+
+    y_true = [0, 1, 0, 1]
+    y_score = [0.1, 0.9, 0.2, 0.8]
+    save_test_predictions(y_true, y_score, tmp_path)
+
+    pred_file = tmp_path / "test_predictions.json"
+    assert pred_file.exists()
+    data = json.loads(pred_file.read_text())
+    assert data["y_true"] == y_true
+    assert data["y_score"] == y_score

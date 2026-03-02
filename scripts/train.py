@@ -268,6 +268,16 @@ def load_training_data(
     return train_meta, test_meta
 
 
+def save_test_predictions(
+    y_true: list, y_score: list, fold_dir: Path
+) -> None:
+    """Save test-set predictions for later aggregation."""
+    import json
+    pred_path = fold_dir / "test_predictions.json"
+    with open(pred_path, "w") as f:
+        json.dump({"y_true": y_true, "y_score": y_score}, f)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
@@ -341,6 +351,30 @@ def main():
                 model_class, model_kwargs, train_dataset, val_dataset,
                 config, fold_idx, output_dir, args.precision,
             )
+
+        # Evaluate on held-out test set and save predictions
+        test_dataset = FrogDataset(test_meta, image_dir, transform=get_val_transforms())
+        test_loader = DataLoader(
+            test_dataset, batch_size=config["training"]["batch_size"],
+            shuffle=False, num_workers=config["training"].get("num_workers", 4),
+        )
+
+        import torch
+        loaded_model = model_class.load_from_checkpoint(best_path)
+        loaded_model.eval()
+        all_probs, all_labels = [], []
+        with torch.no_grad():
+            for batch in test_loader:
+                images = batch[0]
+                labels = batch[1]
+                logits = loaded_model(images)
+                probs = torch.sigmoid(logits.squeeze(-1))
+                all_probs.extend(probs.cpu().tolist())
+                all_labels.extend(labels.cpu().tolist())
+
+        fold_dir = output_dir / f"fold_{fold_idx}"
+        fold_dir.mkdir(parents=True, exist_ok=True)
+        save_test_predictions(all_labels, all_probs, fold_dir)
 
         results[fold_idx] = {"best_checkpoint": best_path}
         logger.info(f"Fold {fold_idx} best checkpoint: {best_path}")
