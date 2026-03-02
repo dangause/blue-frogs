@@ -16,7 +16,6 @@ import numpy as np
 
 from blue_frogs.config import RESULTS_DIR
 from blue_frogs.evaluation.comparison import compare_models, mcnemar_test
-from blue_frogs.evaluation.metrics import compute_classification_metrics
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)

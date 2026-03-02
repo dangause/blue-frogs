@@ -5,8 +5,6 @@ import json
 
 import numpy as np
 import pytest
-import yaml
-from pathlib import Path
 from PIL import Image
 
 
