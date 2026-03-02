@@ -1,0 +1,36 @@
+model:
+  backbone: dinov2
+  model_size: base
+  hidden_dim: 256
+  dropout: 0.3
+
+linear_probe:
+  freeze_backbone: true
+  max_epochs: 2
+  learning_rate: 0.001
+
+finetune:
+  freeze_backbone: false
+  max_epochs: 2
+  backbone_lr_factor: 0.01
+  batch_size: 2
+
+training:
+  loss_type: weighted_bce
+  pos_weight: 20.0
+  optimizer: adamw
+  learning_rate: 0.001
+  weight_decay: 0.01
+  batch_size: 8
+  num_workers: 0
+  early_stopping_patience: 3
+  early_stopping_monitor: val/auprc
+  early_stopping_mode: max
+
+data:
+  image_size: 384
+  seed: 42
+  n_negatives: 2000
+
+smoke_test:
+  max_negative_pages: 50
