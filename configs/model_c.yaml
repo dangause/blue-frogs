@@ -11,7 +11,7 @@ training:
   learning_rate: 0.001
   weight_decay: 0.01
   max_epochs: 80
-  batch_size: 16  # ViT needs more memory
+  batch_size: 8  # ViT needs more memory; fits 16GB VRAM
   early_stopping_patience: 10
   early_stopping_monitor: val/auprc
   early_stopping_mode: max

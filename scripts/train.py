@@ -11,7 +11,7 @@ from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
 
 from blue_frogs.config import MODEL_DIR, RANDOM_SEED
-from blue_frogs.data.dataset import FrogDataset, get_train_transforms, get_val_transforms
+from blue_frogs.data.dataset import FrogColorDataset, FrogDataset, get_train_transforms, get_val_transforms
 from blue_frogs.data.splits import get_fold_indices
 from blue_frogs.models.common import make_weighted_sampler
 from blue_frogs.models.model_a import EfficientNetClassifier
@@ -61,15 +61,18 @@ def build_model_kwargs(model_name: str, config: dict) -> dict:
             "color_feature_dim": cls_cfg["color_feature_dim"],
             "fusion_hidden": cls_cfg["fusion_hidden"],
             "dropout": cls_cfg["dropout"],
+            "freeze_backbone": cls_cfg.get("freeze_backbone", False),
         }
     elif model_name == "model_c":
         model_cfg = config["model"]
         return {
             **common_kwargs,
             "backbone": model_cfg["backbone"],
+            "pretrained": model_cfg.get("pretrained", True),
             "model_size": model_cfg["model_size"],
             "hidden_dim": model_cfg["hidden_dim"],
             "dropout": model_cfg["dropout"],
+            "freeze_backbone": model_cfg.get("freeze_backbone", False),
         }
     else:
         raise ValueError(f"Unknown model: {model_name}")
@@ -295,6 +298,19 @@ def main():
         "--wandb-offline", action="store_true",
         help="Run WandB in offline mode (sync logs later)",
     )
+    # Model B crop / precomputed LAB args
+    parser.add_argument(
+        "--crop-dir", type=Path, default=None,
+        help="Directory with YOLO-cropped images (Model B)",
+    )
+    parser.add_argument(
+        "--lab-features", type=Path, default=None,
+        help="Path to pre-computed LAB features .npy file (Model B)",
+    )
+    parser.add_argument(
+        "--lab-index", type=Path, default=None,
+        help="Path to LAB index .json mapping photo_path -> row index (Model B)",
+    )
     args = parser.parse_args()
 
     if args.wandb_offline:
@@ -331,6 +347,21 @@ def main():
     model_kwargs = build_model_kwargs(args.model, config)
     results = {}
 
+    # Load precomputed LAB features for Model B if provided
+    precomputed_lab = None
+    if args.model == "model_b" and args.lab_features and args.lab_index:
+        import numpy as np
+        lab_array = np.load(args.lab_features)
+        import json as json_mod
+        with open(args.lab_index) as f:
+            lab_index = json_mod.load(f)
+        # Build lookup: photo_path -> feature vector
+        precomputed_lab = {
+            photo_path: lab_array[int(row_idx)]
+            for photo_path, row_idx in lab_index.items()
+        }
+        logger.info("Loaded precomputed LAB features: %d entries", len(precomputed_lab))
+
     for fold_idx in fold_list:
         logger.info(f"--- Fold {fold_idx}/{n_folds - 1} ---")
         train_idx, val_idx = folds[fold_idx]
@@ -338,10 +369,21 @@ def main():
         fold_train_meta = [train_meta[i] for i in train_idx]
         fold_val_meta = [train_meta[i] for i in val_idx]
 
-        train_dataset = FrogDataset(fold_train_meta, image_dir, transform=get_train_transforms())
-        val_dataset = FrogDataset(fold_val_meta, image_dir, transform=get_val_transforms())
+        if args.model == "model_b":
+            train_dataset = FrogColorDataset(
+                fold_train_meta, image_dir, transform=get_train_transforms(),
+                crop_dir=args.crop_dir, precomputed_lab=precomputed_lab,
+            )
+            val_dataset = FrogColorDataset(
+                fold_val_meta, image_dir, transform=get_val_transforms(),
+                crop_dir=args.crop_dir, precomputed_lab=precomputed_lab,
+            )
+        else:
+            train_dataset = FrogDataset(fold_train_meta, image_dir, transform=get_train_transforms())
+            val_dataset = FrogDataset(fold_val_meta, image_dir, transform=get_val_transforms())
 
-        if args.model == "model_c" and "linear_probe" in config:
+        use_two_stage = args.model in ("model_b", "model_c") and "linear_probe" in config
+        if use_two_stage:
             best_path = train_fold_two_stage(
                 model_class, model_kwargs, train_dataset, val_dataset,
                 config, fold_idx, output_dir, args.precision,
@@ -353,7 +395,13 @@ def main():
             )
 
         # Evaluate on held-out test set and save predictions
-        test_dataset = FrogDataset(test_meta, image_dir, transform=get_val_transforms())
+        if args.model == "model_b":
+            test_dataset = FrogColorDataset(
+                test_meta, image_dir, transform=get_val_transforms(),
+                crop_dir=args.crop_dir, precomputed_lab=precomputed_lab,
+            )
+        else:
+            test_dataset = FrogDataset(test_meta, image_dir, transform=get_val_transforms())
         test_loader = DataLoader(
             test_dataset, batch_size=config["training"]["batch_size"],
             shuffle=False, num_workers=config["training"].get("num_workers", 4),
@@ -362,12 +410,17 @@ def main():
         import torch
         loaded_model = model_class.load_from_checkpoint(best_path)
         loaded_model.eval()
+        loaded_model.float()  # ensure float32 for MPS/CPU test evaluation
+        loaded_model.cpu()    # avoid MPS tensor type mismatches
         all_probs, all_labels = [], []
         with torch.no_grad():
             for batch in test_loader:
-                images = batch[0]
-                labels = batch[1]
-                logits = loaded_model(images)
+                if args.model == "model_b":
+                    images, color_feats, labels = batch
+                    logits = loaded_model(images.float(), color_feats.float())
+                else:
+                    images, labels = batch
+                    logits = loaded_model(images.float())
                 probs = torch.sigmoid(logits.squeeze(-1))
                 all_probs.extend(probs.cpu().tolist())
                 all_labels.extend(labels.cpu().tolist())
