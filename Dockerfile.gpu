@@ -39,8 +39,11 @@ COPY src/ src/
 COPY configs/ configs/
 COPY scripts/ scripts/
 
+# Pre-download YOLOv8m weights for Model B (avoids runtime download)
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8m.pt')"
+
 # Data and results are bind-mounted at runtime
 VOLUME ["/app/data", "/app/results"]
 
-# No ENTRYPOINT — Apptainer calls python directly:
-#   apptainer exec --nv blue-frogs-gpu.sif python scripts/train.py ...
+# No ENTRYPOINT — calls python directly:
+#   docker run --gpus all -v data:/app/data blue-frogs-gpu python scripts/train.py ...

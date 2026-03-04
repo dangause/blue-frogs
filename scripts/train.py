@@ -68,9 +68,11 @@ def build_model_kwargs(model_name: str, config: dict) -> dict:
         return {
             **common_kwargs,
             "backbone": model_cfg["backbone"],
+            "pretrained": model_cfg.get("pretrained", True),
             "model_size": model_cfg["model_size"],
             "hidden_dim": model_cfg["hidden_dim"],
             "dropout": model_cfg["dropout"],
+            "freeze_backbone": model_cfg.get("freeze_backbone", False),
         }
     else:
         raise ValueError(f"Unknown model: {model_name}")
