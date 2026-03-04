@@ -73,20 +73,37 @@ def fetch_observation_batch(
     id_above: int,
     target_count: int,
     per_page: int = 200,
+    max_retries: int = 3,
 ) -> list[dict[str, Any]]:
     """Accumulate API pages until *target_count* observations collected.
 
     Returns early when the API returns an empty page (end of corpus).
-    Respects iNat rate limits between requests.
+    Retries with exponential backoff on 429 rate-limit errors.
     """
+    from requests.exceptions import HTTPError
+
     observations: list[dict] = []
     cursor = id_above
     delay = 60.0 / INAT_RATE_LIMIT
 
     while len(observations) < target_count:
-        response = fetch_anura_observations_page(
-            id_above=cursor, per_page=per_page,
-        )
+        for attempt in range(max_retries + 1):
+            try:
+                response = fetch_anura_observations_page(
+                    id_above=cursor, per_page=per_page,
+                )
+                break
+            except HTTPError as e:
+                if "429" in str(e) and attempt < max_retries:
+                    wait = 60 * (2 ** attempt)  # 60s, 120s, 240s
+                    logger.warning(
+                        "Rate limited (attempt %d/%d), waiting %ds...",
+                        attempt + 1, max_retries, wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
+
         results = response.get("results", [])
         if not results:
             break  # end of corpus
