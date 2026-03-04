@@ -99,14 +99,23 @@ python scripts/stream_inference.py \
   --obs-per-batch 200 --max-batches 5
 ```
 
-### Run batch inference
+### GPU training (Docker, full pipeline)
 
 ```bash
-python scripts/run_inference.py \
-  --checkpoint models/model_a_fold0.ckpt \
-  --image-dir data/raw_images \
-  --metadata data/metadata.json \
-  --threshold 0.5
+# Build the GPU image
+docker build -f Dockerfile.gpu -t blue-frogs-gpu .
+
+# Train all 3 models (5 folds each) + aggregate results
+bash scripts/docker/train_all.sh
+
+# Run streaming inference on the full iNat corpus
+bash scripts/docker/run_inference.sh
+```
+
+Override defaults with environment variables:
+
+```bash
+DATA_DIR=/data/frogs RESULTS_DIR=/results GPU_ID=0 bash scripts/docker/train_all.sh
 ```
 
 ### Download images from iNaturalist
