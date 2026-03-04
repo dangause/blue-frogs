@@ -56,11 +56,12 @@ def run_batch_inference(
         num_workers=num_workers, pin_memory=True,
     )
 
+    device = next(model.parameters()).device
+
     results = []
     idx = 0
     for images, _ in tqdm(loader, desc="Inference"):
-        if torch.cuda.is_available():
-            images = images.cuda()
+        images = images.to(device)
         logits = model(images)
         probs = torch.sigmoid(logits.squeeze(-1)).cpu().numpy()
 

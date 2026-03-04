@@ -17,6 +17,7 @@ class FusionClassifier(BaseClassifier):
         color_feature_dim: int = 30,
         fusion_hidden: int = 256,
         dropout: float = 0.3,
+        freeze_backbone: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -24,6 +25,10 @@ class FusionClassifier(BaseClassifier):
 
         self.backbone = timm.create_model(backbone, pretrained=pretrained, num_classes=0)
         cnn_dim = self.backbone.num_features
+
+        if freeze_backbone:
+            for param in self.backbone.parameters():
+                param.requires_grad = False
 
         self.head = nn.Sequential(
             nn.Linear(cnn_dim + color_feature_dim, fusion_hidden),
