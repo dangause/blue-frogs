@@ -29,10 +29,10 @@ fi
 
 source .venv/bin/activate
 
-# Install PyTorch (ARM64-compatible via pip)
+# Install PyTorch
 echo "[2/4] Installing PyTorch..."
 pip install --upgrade pip
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchvision torchaudio
 
 # Install project with all extras
 echo "[3/4] Installing blue-frogs..."
