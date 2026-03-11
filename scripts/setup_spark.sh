@@ -29,10 +29,11 @@ fi
 
 source .venv/bin/activate
 
-# Install PyTorch
-echo "[2/4] Installing PyTorch..."
+# Install PyTorch with CUDA support for aarch64
+# Default PyPI wheels are CPU-only on ARM64; CUDA wheels are on PyTorch's index
+echo "[2/4] Installing PyTorch with CUDA..."
 pip install --upgrade pip
-pip install torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 
 # Install project with all extras
 echo "[3/4] Installing blue-frogs..."

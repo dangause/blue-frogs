@@ -77,8 +77,8 @@ class BaseClassifier(pl.LightningModule):
         return loss
 
     def on_validation_epoch_end(self):
-        all_probs = torch.cat([o["probs"] for o in self._val_outputs]).numpy()
-        all_labels = torch.cat([o["labels"] for o in self._val_outputs]).numpy()
+        all_probs = torch.cat([o["probs"] for o in self._val_outputs]).float().numpy()
+        all_labels = torch.cat([o["labels"] for o in self._val_outputs]).float().numpy()
         avg_loss = torch.stack([o["loss"] for o in self._val_outputs]).mean()
 
         if len(set(all_labels)) >= 2:
