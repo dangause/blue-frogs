@@ -137,7 +137,7 @@ def train_fold(
         precision=precision,
         callbacks=[checkpoint_cb, early_stop_cb],
         logger=wandb_logger,
-        deterministic=True,
+        deterministic="warn",
     )
     trainer.fit(model, train_loader, val_loader)
 
@@ -198,7 +198,7 @@ def train_fold_two_stage(
 
     trainer = pl.Trainer(
         max_epochs=probe_cfg["max_epochs"], accelerator="auto", precision=precision,
-        callbacks=[checkpoint_cb], logger=wandb_logger, deterministic=True,
+        callbacks=[checkpoint_cb], logger=wandb_logger, deterministic="warn",
     )
     trainer.fit(model, train_loader, val_loader)
     probe_ckpt = checkpoint_cb.best_model_path
@@ -243,7 +243,7 @@ def train_fold_two_stage(
         max_epochs=ft_cfg.get("max_epochs", config["training"]["max_epochs"]),
         accelerator="auto", precision=precision,
         callbacks=[checkpoint_cb, early_stop_cb], logger=wandb_logger,
-        deterministic=True,
+        deterministic="warn",
     )
     trainer.fit(model, train_loader, val_loader)
     logger.info(f"Fine-tune complete. Best: {checkpoint_cb.best_model_path}")
