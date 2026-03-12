@@ -254,6 +254,7 @@ def run_streaming_inference(
     max_batches: int | None = None,
     detector=None,
     num_workers: int = 4,
+    save_flagged: bool = False,
 ) -> Path:
     """Streaming inference over the full iNat Anura corpus.
 
@@ -392,20 +393,34 @@ def run_streaming_inference(
             shutil.rmtree(batch_image_dir, ignore_errors=True)
             raise
 
-        # 6. Append predictions to CSV
+        # 6. Save flagged images before cleanup
+        if save_flagged:
+            flagged_dir = output_dir / "flagged_images"
+            flagged_dir.mkdir(parents=True, exist_ok=True)
+            for _, row in predictions.iterrows():
+                if row["prediction_score"] >= threshold:
+                    obs_id = row["observation_id"]
+                    photo_id = row["photo_id"]
+                    score = row["prediction_score"]
+                    src = batch_image_dir / str(obs_id) / f"{photo_id}.jpg"
+                    if src.exists():
+                        dst = flagged_dir / f"{obs_id}_{photo_id}_score{score:.3f}.jpg"
+                        shutil.copy2(src, dst)
+
+        # 7. Append predictions to CSV
         append_predictions(predictions, predictions_path)
 
-        # 7. Update + save state (atomic)
+        # 8. Update + save state (atomic)
         state.last_id_above = max(o["id"] for o in observations)
         state.total_observations += len(observations)
         state.total_photos_scored += len(predictions)
         state.batches_completed += 1
         save_state(state_file, state)
 
-        # 8. Delete batch images
+        # 9. Delete batch images
         shutil.rmtree(batch_image_dir, ignore_errors=True)
 
-        # 9. Log progress
+        # 10. Log progress
         logger.info(
             "Batch %d complete: %d photos scored | cumulative: %d obs, %d photos",
             state.batches_completed,

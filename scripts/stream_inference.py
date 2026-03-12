@@ -84,6 +84,10 @@ def parse_args() -> argparse.Namespace:
         "--max-batches", type=int, default=None,
         help="Stop after N batches (useful for testing)",
     )
+    parser.add_argument(
+        "--save-flagged", action="store_true", default=False,
+        help="Save flagged images to <output-dir>/flagged_images/",
+    )
     return parser.parse_args()
 
 
@@ -133,6 +137,7 @@ def main() -> None:
         max_batches=args.max_batches,
         detector=detector,
         num_workers=args.num_workers,
+        save_flagged=args.save_flagged,
     )
 
     # Generate flagged predictions summary
