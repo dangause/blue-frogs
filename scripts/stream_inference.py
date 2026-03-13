@@ -87,6 +87,10 @@ def parse_args() -> argparse.Namespace:
         "--save-flagged", action="store_true", default=False,
         help="Save flagged images to <output-dir>/flagged_images/",
     )
+    parser.add_argument(
+        "--calibration-file", type=Path, default=None,
+        help="Path to calibration.json with per-model temperature and threshold",
+    )
     return parser.parse_args()
 
 
@@ -133,6 +137,17 @@ def main() -> None:
         detector = FrogDetector(model_path=det_path)
         logger.info("Loaded FrogDetector for Model B")
 
+    # Load calibration if provided
+    calibration = None
+    if args.calibration_file:
+        import json
+        with open(args.calibration_file) as f:
+            calibration = json.load(f)
+        logger.info("Loaded calibration from %s", args.calibration_file)
+        for name, cal in calibration.items():
+            logger.info("  %s: T=%.3f, threshold=%.4f",
+                        name, cal.get("temperature", 1.0), cal.get("threshold", 0.5))
+
     # Run streaming multi-model inference
     predictions_paths = run_streaming_inference_multi(
         models=models,
@@ -147,20 +162,23 @@ def main() -> None:
         detector=detector,
         num_workers=args.num_workers,
         save_flagged=args.save_flagged,
+        calibration=calibration,
     )
 
     # Generate flagged predictions summary per model
     for model_name, pred_path in predictions_paths.items():
         if pred_path.exists():
             all_preds = pd.read_csv(pred_path)
-            flagged = filter_flagged_predictions(all_preds, args.threshold)
+            cal = (calibration or {}).get(model_name, {})
+            flag_thresh = cal.get("threshold", args.threshold)
+            flagged = filter_flagged_predictions(all_preds, flag_thresh)
             flagged_path = pred_path.parent / f"flagged_{model_name}_v1.csv"
             flagged.to_csv(flagged_path, index=False)
             logger.info(
-                "%s: Flagged %d / %d photos (%.2f%%) → %s",
+                "%s: Flagged %d / %d photos (%.2f%%) at threshold %.4f → %s",
                 model_name, len(flagged), len(all_preds),
                 100 * len(flagged) / max(len(all_preds), 1),
-                flagged_path,
+                flag_thresh, flagged_path,
             )
 
 

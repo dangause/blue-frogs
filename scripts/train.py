@@ -272,13 +272,16 @@ def load_training_data(
 
 
 def save_test_predictions(
-    y_true: list, y_score: list, fold_dir: Path
+    y_true: list, y_score: list, fold_dir: Path, logits: list | None = None
 ) -> None:
-    """Save test-set predictions for later aggregation."""
+    """Save test-set predictions for later aggregation and calibration."""
     import json
+    data = {"y_true": y_true, "y_score": y_score}
+    if logits is not None:
+        data["logits"] = logits
     pred_path = fold_dir / "test_predictions.json"
     with open(pred_path, "w") as f:
-        json.dump({"y_true": y_true, "y_score": y_score}, f)
+        json.dump(data, f)
 
 
 def main():
@@ -382,7 +385,7 @@ def main():
             train_dataset = FrogDataset(fold_train_meta, image_dir, transform=get_train_transforms())
             val_dataset = FrogDataset(fold_val_meta, image_dir, transform=get_val_transforms())
 
-        use_two_stage = args.model in ("model_b", "model_c") and "linear_probe" in config
+        use_two_stage = "linear_probe" in config
         if use_two_stage:
             best_path = train_fold_two_stage(
                 model_class, model_kwargs, train_dataset, val_dataset,
@@ -412,7 +415,7 @@ def main():
         loaded_model.eval()
         loaded_model.float()  # ensure float32 for MPS/CPU test evaluation
         loaded_model.cpu()    # avoid MPS tensor type mismatches
-        all_probs, all_labels = [], []
+        all_probs, all_labels, all_logits = [], [], []
         with torch.no_grad():
             for batch in test_loader:
                 if args.model == "model_b":
@@ -421,13 +424,15 @@ def main():
                 else:
                     images, labels = batch
                     logits = loaded_model(images.float())
-                probs = torch.sigmoid(logits.squeeze(-1))
+                logits_squeezed = logits.squeeze(-1)
+                probs = torch.sigmoid(logits_squeezed)
                 all_probs.extend(probs.cpu().tolist())
+                all_logits.extend(logits_squeezed.cpu().tolist())
                 all_labels.extend(labels.cpu().tolist())
 
         fold_dir = output_dir / f"fold_{fold_idx}"
         fold_dir.mkdir(parents=True, exist_ok=True)
-        save_test_predictions(all_labels, all_probs, fold_dir)
+        save_test_predictions(all_labels, all_probs, fold_dir, logits=all_logits)
 
         results[fold_idx] = {"best_checkpoint": best_path}
         logger.info(f"Fold {fold_idx} best checkpoint: {best_path}")

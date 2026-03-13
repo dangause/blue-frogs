@@ -188,8 +188,13 @@ def score_batch_model_b(
     model_version: str = "unknown",
     batch_size: int = 64,
     num_workers: int = 4,
+    temperature: float = 1.0,
 ) -> pd.DataFrame:
-    """Score images with a FusionClassifier that needs (images, color_features)."""
+    """Score images with a FusionClassifier that needs (images, color_features).
+
+    Args:
+        temperature: Temperature scaling parameter for calibrated probabilities.
+    """
     model.eval()
     device = next(model.parameters()).device
 
@@ -207,8 +212,8 @@ def score_batch_model_b(
         bs = images.size(0)
         batch_cf = cf_tensor[idx : idx + bs].to(device)
         images = images.to(device)
-        logits = model(images, batch_cf)
-        probs = torch.sigmoid(logits.squeeze(-1)).cpu().numpy()
+        logits = model(images, batch_cf).squeeze(-1)
+        probs = torch.sigmoid(logits / temperature).cpu().numpy()
 
         for prob in probs:
             entry = metadata[idx]
@@ -457,11 +462,16 @@ def run_streaming_inference_multi(
     detector=None,
     num_workers: int = 4,
     save_flagged: bool = False,
+    calibration: dict | None = None,
 ) -> dict[str, Path]:
     """Streaming inference with multiple models — download once, score N times.
 
     Model B must be scored last because YOLO preprocessing modifies images
     in-place (crops overwrite originals).
+
+    Args:
+        calibration: Optional dict from calibration.json. Per-model keys with
+            'temperature' and 'threshold' values for calibrated scoring.
 
     Returns dict mapping model_name → predictions CSV path.
     """
@@ -552,16 +562,21 @@ def run_streaming_inference_multi(
 
         # 4. Score non-B models first (original images)
         for model_name in non_b_models:
-            logger.info("Scoring %d images with %s...", len(metadata), model_name)
+            cal = (calibration or {}).get(model_name, {})
+            model_temp = cal.get("temperature", 1.0)
+            model_thresh = cal.get("threshold", threshold)
+            logger.info("Scoring %d images with %s (T=%.3f, thresh=%.4f)...",
+                        len(metadata), model_name, model_temp, model_thresh)
             try:
                 preds = run_batch_inference(
                     model=models[model_name],
                     metadata=metadata,
                     image_dir=batch_image_dir,
-                    threshold=threshold,
+                    threshold=model_thresh,
                     model_version=f"{model_name}_v1",
                     batch_size=inference_batch_size,
                     num_workers=num_workers,
+                    temperature=model_temp,
                 )
                 batch_predictions[model_name] = preds
             except Exception:
@@ -569,7 +584,11 @@ def run_streaming_inference_multi(
 
         # 5. Score Model B last (YOLO crop modifies images in-place)
         if has_model_b and detector is not None:
-            logger.info("Scoring %d images with model_b...", len(metadata))
+            cal_b = (calibration or {}).get("model_b", {})
+            b_temp = cal_b.get("temperature", 1.0)
+            b_thresh = cal_b.get("threshold", threshold)
+            logger.info("Scoring %d images with model_b (T=%.3f, thresh=%.4f)...",
+                        len(metadata), b_temp, b_thresh)
             try:
                 color_features = preprocess_model_b(
                     available_manifest, batch_image_dir, detector,
@@ -579,10 +598,11 @@ def run_streaming_inference_multi(
                     metadata=metadata,
                     color_features=color_features,
                     image_dir=batch_image_dir,
-                    threshold=threshold,
+                    threshold=b_thresh,
                     model_version="model_b_v1",
                     batch_size=inference_batch_size,
                     num_workers=num_workers,
+                    temperature=b_temp,
                 )
                 batch_predictions["model_b"] = preds
             except Exception:
@@ -594,8 +614,10 @@ def run_streaming_inference_multi(
             flagged_dir.mkdir(parents=True, exist_ok=True)
             saved_ids = set()
             for model_name, preds in batch_predictions.items():
+                cal_m = (calibration or {}).get(model_name, {})
+                flag_thresh = cal_m.get("threshold", threshold)
                 for _, row in preds.iterrows():
-                    if row["prediction_score"] >= threshold:
+                    if row["prediction_score"] >= flag_thresh:
                         obs_id = row["observation_id"]
                         photo_id = row["photo_id"]
                         key = (obs_id, photo_id)

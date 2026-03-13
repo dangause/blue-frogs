@@ -47,8 +47,14 @@ def run_batch_inference(
     model_version: str = "unknown",
     batch_size: int = 64,
     num_workers: int = 4,
+    temperature: float = 1.0,
 ) -> pd.DataFrame:
-    """Run inference on a batch of images and return predictions DataFrame."""
+    """Run inference on a batch of images and return predictions DataFrame.
+
+    Args:
+        temperature: Temperature scaling parameter. Values > 1 soften
+            overconfident predictions (from calibration).
+    """
     model.eval()
     dataset = FrogDataset(metadata, image_dir, transform=get_val_transforms())
     loader = DataLoader(
@@ -62,8 +68,8 @@ def run_batch_inference(
     idx = 0
     for images, _ in tqdm(loader, desc="Inference"):
         images = images.to(device)
-        logits = model(images)
-        probs = torch.sigmoid(logits.squeeze(-1)).cpu().numpy()
+        logits = model(images).squeeze(-1)
+        probs = torch.sigmoid(logits / temperature).cpu().numpy()
 
         for prob in probs:
             entry = metadata[idx]

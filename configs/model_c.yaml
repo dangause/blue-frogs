@@ -5,8 +5,8 @@ model:
   dropout: 0.3
 
 training:
-  loss_type: weighted_bce
-  pos_weight: 20.0
+  loss_type: focal
+  pos_weight: 1.0
   optimizer: adamw
   learning_rate: 0.001
   weight_decay: 0.01
