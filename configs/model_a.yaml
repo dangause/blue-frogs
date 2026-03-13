@@ -20,6 +20,10 @@ linear_probe:
   max_epochs: 10
   learning_rate: 0.01
 
+finetune:
+  max_epochs: 80
+  batch_size: 32
+
 data:
   image_size: 384
   n_folds: 5
