@@ -41,8 +41,10 @@ def load_flagged_csvs(csv_paths: list[Path]) -> dict[str, pd.DataFrame]:
     return model_dfs
 
 
-def find_intersection(model_dfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Find photos flagged by ALL models."""
+def find_intersection(
+    model_dfs: dict[str, pd.DataFrame], min_score: float = 0.0
+) -> pd.DataFrame:
+    """Find photos flagged by ALL models, optionally filtered by min score."""
     if len(model_dfs) < 2:
         return list(model_dfs.values())[0]
 
@@ -71,6 +73,14 @@ def find_intersection(model_dfs: dict[str, pd.DataFrame]) -> pd.DataFrame:
     # Add average score for sorting
     score_cols = [c for c in merged.columns if c.startswith("score_")]
     merged["avg_score"] = merged[score_cols].mean(axis=1)
+
+    # Filter by min_score (all models must meet threshold)
+    if min_score > 0:
+        before_count = len(merged)
+        for col in score_cols:
+            merged = merged[merged[col] >= min_score]
+        logger.info(f"Filtered to {len(merged)}/{before_count} with all scores >= {min_score}")
+
     return merged.sort_values("avg_score", ascending=False)
 
 
@@ -346,6 +356,10 @@ def main():
         help="Only show images flagged by ALL models (default: union)",
     )
     parser.add_argument(
+        "--min-score", type=float, default=0.0,
+        help="Minimum score threshold (applies to all models in intersection mode)",
+    )
+    parser.add_argument(
         "--title", type=str, default="Axanthism Candidates Gallery",
         help="Gallery title",
     )
@@ -357,10 +371,14 @@ def main():
 
     # Merge according to mode
     if args.intersection and len(model_dfs) > 1:
-        merged = find_intersection(model_dfs)
+        merged = find_intersection(model_dfs, min_score=args.min_score)
         logger.info(f"Intersection mode: {len(merged)} images")
     else:
         merged = find_union(model_dfs)
+        if args.min_score > 0:
+            before = len(merged)
+            merged = merged[merged["prediction_score"] >= args.min_score]
+            logger.info(f"Filtered to {len(merged)}/{before} with score >= {args.min_score}")
         logger.info(f"Union mode: {len(merged)} images")
 
     if len(merged) == 0:
