@@ -1,10 +1,15 @@
 """Unified training script for all model architectures."""
 
 import argparse
+import json
 import logging
+import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytorch_lightning as pl
+import torch
 import yaml
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -259,8 +264,6 @@ def load_training_data(
     labels_file: JSON list of {observation_id, photo_id, photo_path, label}
     splits_file: JSON with {train_indices: [...], test_indices: [...]}
     """
-    import json
-
     with open(labels_file) as f:
         all_metadata = json.load(f)
     with open(splits_file) as f:
@@ -275,13 +278,74 @@ def save_test_predictions(
     y_true: list, y_score: list, fold_dir: Path, logits: list | None = None
 ) -> None:
     """Save test-set predictions for later aggregation and calibration."""
-    import json
     data = {"y_true": y_true, "y_score": y_score}
     if logits is not None:
         data["logits"] = logits
     pred_path = fold_dir / "test_predictions.json"
     with open(pred_path, "w") as f:
         json.dump(data, f)
+
+
+def save_training_metadata(
+    fold_dir: Path,
+    model_name: str,
+    fold: int,
+    config: dict,
+    train_meta: list[dict],
+    val_meta: list[dict],
+    best_checkpoint: str,
+) -> None:
+    """Save training metadata for reproducibility and model cards."""
+    # Git info
+    try:
+        git_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        git_branch = subprocess.check_output(
+            ["git", "branch", "--show-current"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        git_dirty = subprocess.call(
+            ["git", "diff", "--quiet"], stderr=subprocess.DEVNULL
+        ) != 0
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        git_commit, git_branch, git_dirty = "unknown", "unknown", False
+
+    # Data stats
+    train_labels = [m["label"] for m in train_meta]
+    val_labels = [m["label"] for m in val_meta]
+
+    metadata = {
+        "model_name": model_name,
+        "fold": fold,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "git": {
+            "commit": git_commit,
+            "branch": git_branch,
+            "dirty": git_dirty,
+        },
+        "config": config,
+        "data_stats": {
+            "n_train": len(train_meta),
+            "n_val": len(val_meta),
+            "pos_ratio_train": sum(train_labels) / len(train_labels) if train_labels else 0,
+            "pos_ratio_val": sum(val_labels) / len(val_labels) if val_labels else 0,
+            "n_pos_train": sum(train_labels),
+            "n_pos_val": sum(val_labels),
+        },
+        "environment": {
+            "python_version": sys.version.split()[0],
+            "pytorch_version": torch.__version__,
+            "pytorch_lightning_version": pl.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
+        },
+        "best_checkpoint": str(best_checkpoint),
+    }
+
+    meta_path = fold_dir / "training_metadata.json"
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+    logger.info(f"Training metadata saved to {meta_path}")
 
 
 def main():
@@ -355,9 +419,8 @@ def main():
     if args.model == "model_b" and args.lab_features and args.lab_index:
         import numpy as np
         lab_array = np.load(args.lab_features)
-        import json as json_mod
         with open(args.lab_index) as f:
-            lab_index = json_mod.load(f)
+            lab_index = json.load(f)
         # Build lookup: photo_path -> feature vector
         precomputed_lab = {
             photo_path: lab_array[int(row_idx)]
@@ -410,7 +473,6 @@ def main():
             shuffle=False, num_workers=config["training"].get("num_workers", 4),
         )
 
-        import torch
         loaded_model = model_class.load_from_checkpoint(best_path)
         loaded_model.eval()
         loaded_model.float()  # ensure float32 for MPS/CPU test evaluation
@@ -434,11 +496,21 @@ def main():
         fold_dir.mkdir(parents=True, exist_ok=True)
         save_test_predictions(all_labels, all_probs, fold_dir, logits=all_logits)
 
+        # Save training metadata for reproducibility
+        save_training_metadata(
+            fold_dir=fold_dir,
+            model_name=args.model,
+            fold=fold_idx,
+            config=config,
+            train_meta=fold_train_meta,
+            val_meta=fold_val_meta,
+            best_checkpoint=best_path,
+        )
+
         results[fold_idx] = {"best_checkpoint": best_path}
         logger.info(f"Fold {fold_idx} best checkpoint: {best_path}")
 
     # Save fold results summary
-    import json
     summary_path = output_dir / "training_summary.json"
     with open(summary_path, "w") as f:
         json.dump(results, f, indent=2, default=str)
