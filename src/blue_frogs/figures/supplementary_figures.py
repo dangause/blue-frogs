@@ -301,7 +301,14 @@ def plot_multi_model_comparison(
     """
     from blue_frogs.evaluation.metrics import compute_bootstrap_ci
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # Friendly model names
+    model_labels = {
+        "model_a": "EfficientNetV2-S",
+        "model_b": "Two-Stage + LAB",
+        "model_c": "DINOv2",
+    }
+
+    fig, ax = plt.subplots(figsize=(9, 6))
 
     model_names = list(model_scores.keys())
     means = []
@@ -318,7 +325,7 @@ def plot_multi_model_comparison(
     x = np.arange(len(model_names))
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c"]
 
-    ax.bar(
+    bars = ax.bar(
         x, means,
         yerr=[ci_lower, ci_upper],
         capsize=5,
@@ -327,20 +334,33 @@ def plot_multi_model_comparison(
         edgecolor="black",
     )
 
+    # Use friendly labels
+    display_names = [model_labels.get(n, n) for n in model_names]
     ax.set_xticks(x)
-    ax.set_xticklabels(model_names)
+    ax.set_xticklabels(display_names)
     ax.set_ylabel(metric.upper())
     ax.set_title(f"Model Comparison - {metric.upper()}")
-    ax.set_ylim([0.8, 1.0])  # Typical range for high-performing models
+
+    # Dynamic y-axis: start from min - margin, end at 1.0 + margin for labels
+    min_val = min(m - lo for m, lo in zip(means, ci_lower))
+    ax.set_ylim([max(0, min_val - 0.05), 1.05])
     ax.grid(True, axis="y", alpha=0.3)
 
-    # Add value labels on bars
+    # Add value labels inside bars (near top)
     for i, (m, lo, hi) in enumerate(zip(means, ci_lower, ci_upper)):
-        ax.annotate(
-            f"{m:.3f}\n[{m-lo:.3f}, {m+hi:.3f}]",
-            xy=(i, m + hi + 0.01),
-            ha="center",
-            fontsize=9,
+        # Place text inside the bar
+        ax.text(
+            i, m - 0.02,
+            f"{m:.3f}",
+            ha="center", va="top",
+            fontsize=11, fontweight="bold", color="white",
+        )
+        # Place CI below the bar
+        ax.text(
+            i, min_val - 0.02,
+            f"95% CI: [{m-lo:.3f}, {m+hi:.3f}]",
+            ha="center", va="top",
+            fontsize=8, color="gray",
         )
 
     plt.tight_layout()
