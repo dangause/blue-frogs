@@ -28,6 +28,7 @@ dependencies = [
     "tqdm>=4.66",
     "requests>=2.31",
     "aiohttp>=3.9",
+    "transformers>=4.56.0",
 ]
 
 [project.optional-dependencies]
