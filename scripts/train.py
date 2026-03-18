@@ -22,6 +22,7 @@ from blue_frogs.models.common import make_weighted_sampler
 from blue_frogs.models.model_a import EfficientNetClassifier
 from blue_frogs.models.model_b_classifier import FusionClassifier
 from blue_frogs.models.model_c import FoundationModelClassifier
+from blue_frogs.models.model_d import DINOv3Classifier
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ MODEL_CLASSES = {
     "model_a": EfficientNetClassifier,
     "model_b": FusionClassifier,
     "model_c": FoundationModelClassifier,
+    "model_d": DINOv3Classifier,
 }
 
 
@@ -69,6 +71,17 @@ def build_model_kwargs(model_name: str, config: dict) -> dict:
             "freeze_backbone": cls_cfg.get("freeze_backbone", False),
         }
     elif model_name == "model_c":
+        model_cfg = config["model"]
+        return {
+            **common_kwargs,
+            "backbone": model_cfg["backbone"],
+            "pretrained": model_cfg.get("pretrained", True),
+            "model_size": model_cfg["model_size"],
+            "hidden_dim": model_cfg["hidden_dim"],
+            "dropout": model_cfg["dropout"],
+            "freeze_backbone": model_cfg.get("freeze_backbone", False),
+        }
+    elif model_name == "model_d":
         model_cfg = config["model"]
         return {
             **common_kwargs,
@@ -159,7 +172,7 @@ def train_fold_two_stage(
     output_dir: Path,
     precision: str = "16-mixed",
 ):
-    """Train Model C in two stages: linear probe (frozen) then fine-tune (unfrozen)."""
+    """Train foundation model in two stages: linear probe (frozen) then fine-tune (unfrozen)."""
     pl.seed_everything(RANDOM_SEED + fold)
 
     num_workers = config["training"].get("num_workers", 4)
