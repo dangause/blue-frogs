@@ -89,13 +89,14 @@ def test_build_model_kwargs_model_c():
     assert kwargs["optimizer"] == "adamw"
 
 
-def test_model_classes_contains_all_three():
-    """MODEL_CLASSES dict has entries for all three models."""
+def test_model_classes_contains_all_models():
+    """MODEL_CLASSES dict has entries for all models."""
     from scripts.train import MODEL_CLASSES
 
     assert "model_a" in MODEL_CLASSES
     assert "model_b" in MODEL_CLASSES
     assert "model_c" in MODEL_CLASSES
+    assert "model_d" in MODEL_CLASSES
 
 
 @pytest.fixture
@@ -182,3 +183,32 @@ def test_save_test_predictions_creates_file(tmp_path):
     data = json.loads(pred_file.read_text())
     assert data["y_true"] == y_true
     assert data["y_score"] == y_score
+
+
+def test_build_model_kwargs_model_d():
+    """build_model_kwargs extracts DINOv3 args for Model D."""
+    from scripts.train import build_model_kwargs
+
+    config = {
+        "model": {
+            "backbone": "dinov3",
+            "model_size": "large",
+            "hidden_dim": 256,
+            "dropout": 0.3,
+            "pretrained": True,
+        },
+        "training": {
+            "loss_type": "focal",
+            "pos_weight": 1.0,
+            "optimizer": "adamw",
+            "learning_rate": 0.001,
+            "weight_decay": 0.01,
+        },
+    }
+    kwargs = build_model_kwargs("model_d", config)
+    assert kwargs["backbone"] == "dinov3"
+    assert kwargs["model_size"] == "large"
+    assert kwargs["hidden_dim"] == 256
+    assert kwargs["pretrained"] is True
+    assert kwargs["optimizer"] == "adamw"
+    assert kwargs["learning_rate"] == 0.001
