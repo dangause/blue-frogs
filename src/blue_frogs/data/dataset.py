@@ -13,6 +13,17 @@ from torch.utils.data import Dataset
 from blue_frogs.config import IMAGE_SIZE, IMAGENET_MEAN, IMAGENET_STD
 from blue_frogs.data.color_features import extract_lab_features
 
+logger = __import__("logging").getLogger(__name__)
+
+
+def _safe_load_image(path: Path) -> np.ndarray:
+    """Load an image, returning a black placeholder if the file is missing or corrupt."""
+    image = cv2.imread(str(path))
+    if image is None:
+        logger.warning("Failed to load image: %s — using placeholder", path)
+        return np.zeros((IMAGE_SIZE, IMAGE_SIZE, 3), dtype=np.uint8)
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
 
 def get_train_transforms() -> A.Compose:
     """Training augmentation pipeline.
@@ -65,8 +76,7 @@ class FrogDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
         entry = self.metadata[idx]
         img_path = self.image_dir / entry["photo_path"]
-        image = cv2.imread(str(img_path))
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = _safe_load_image(img_path)
 
         transformed = self.transform(image=image)
         image_tensor = transformed["image"]
@@ -112,8 +122,7 @@ class FrogColorDataset(Dataset):
         else:
             img_path = self.image_dir / photo_path
 
-        image = cv2.imread(str(img_path))
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = _safe_load_image(img_path)
 
         # Use precomputed LAB or extract on-the-fly
         if self.precomputed_lab is not None and photo_path in self.precomputed_lab:

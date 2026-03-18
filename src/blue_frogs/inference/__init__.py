@@ -13,6 +13,7 @@ from blue_frogs.inference.stream_scorer import (
     load_state,
     preprocess_model_b,
     run_streaming_inference,
+    run_streaming_inference_multi,
     save_state,
     score_batch_model_b,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "load_state",
     "preprocess_model_b",
     "run_streaming_inference",
+    "run_streaming_inference_multi",
     "save_state",
     "score_batch_model_b",
 ]

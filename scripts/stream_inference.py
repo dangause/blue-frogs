@@ -1,4 +1,7 @@
-"""CLI entry point for streaming batch inference on the full iNat frog corpus."""
+"""CLI entry point for streaming batch inference on the full iNat frog corpus.
+
+Supports scoring with multiple models in a single pass (download once, score N times).
+"""
 
 import argparse
 import logging
@@ -9,7 +12,7 @@ import torch
 
 from blue_frogs.config import RESULTS_DIR
 from blue_frogs.inference.batch_scorer import filter_flagged_predictions
-from blue_frogs.inference.stream_scorer import run_streaming_inference
+from blue_frogs.inference.stream_scorer import run_streaming_inference_multi
 from blue_frogs.models.model_a import EfficientNetClassifier
 from blue_frogs.models.model_b_classifier import FusionClassifier
 from blue_frogs.models.model_c import FoundationModelClassifier
@@ -32,13 +35,13 @@ def parse_args() -> argparse.Namespace:
         description="Streaming batch inference over the full iNat Anura corpus",
     )
     parser.add_argument(
-        "--model", type=str, default="model_a",
+        "--models", type=str, nargs="+", required=True,
         choices=list(MODEL_CLASSES.keys()),
-        help="Model architecture to use",
+        help="Model architecture(s) to use (e.g. --models model_a model_b model_c)",
     )
     parser.add_argument(
-        "--checkpoint", type=Path, required=True,
-        help="Path to model checkpoint (.ckpt)",
+        "--checkpoints", type=Path, nargs="+", required=True,
+        help="Checkpoint path(s) matching --models order",
     )
     parser.add_argument(
         "--threshold", type=float, default=0.5,
@@ -73,10 +76,6 @@ def parse_args() -> argparse.Namespace:
         help="DataLoader worker processes",
     )
     parser.add_argument(
-        "--model-version", type=str, default=None,
-        help="Version string for output CSV (default: <model>_v1)",
-    )
-    parser.add_argument(
         "--detector-checkpoint", type=Path, default=None,
         help="YOLOv8 checkpoint for Model B frog detection",
     )
@@ -84,46 +83,75 @@ def parse_args() -> argparse.Namespace:
         "--max-batches", type=int, default=None,
         help="Stop after N batches (useful for testing)",
     )
+    parser.add_argument(
+        "--save-flagged", action="store_true", default=False,
+        help="Save flagged images to <output-dir>/flagged_images/",
+    )
+    parser.add_argument(
+        "--calibration-file", type=Path, default=None,
+        help="Path to calibration.json with per-model temperature and threshold",
+    )
     return parser.parse_args()
+
+
+def load_model(model_name: str, checkpoint: Path):
+    """Load a model checkpoint and move to the best available device."""
+    model_class = MODEL_CLASSES[model_name]
+    logger.info("Loading %s from %s", model_name, checkpoint)
+    model = model_class.load_from_checkpoint(str(checkpoint))
+    model.eval()
+    model.float()
+    if torch.cuda.is_available():
+        model = model.cuda()
+    elif torch.backends.mps.is_available():
+        model = model.to("mps")
+    return model
 
 
 def main() -> None:
     args = parse_args()
 
-    if args.model_version is None:
-        args.model_version = f"{args.model}_v1"
+    if len(args.models) != len(args.checkpoints):
+        raise ValueError(
+            f"Got {len(args.models)} models but {len(args.checkpoints)} checkpoints"
+        )
 
-    # Load model
-    model_class = MODEL_CLASSES[args.model]
-    logger.info("Loading %s from %s", args.model, args.checkpoint)
-    model = model_class.load_from_checkpoint(str(args.checkpoint))
-    model.eval()
-    model.float()  # ensure float32 for inference
+    # Load all models
+    models = {}
+    for name, ckpt in zip(args.models, args.checkpoints):
+        models[name] = load_model(name, ckpt)
+
     if torch.cuda.is_available():
-        model = model.cuda()
         logger.info("Using CUDA GPU: %s", torch.cuda.get_device_name())
     elif torch.backends.mps.is_available():
-        model = model.to("mps")
         logger.info("Using Apple MPS GPU")
     else:
         logger.info("Using CPU")
 
-    # Load detector for Model B
+    # Load detector for Model B if needed
     detector = None
-    if args.model == "model_b":
+    if "model_b" in args.models:
         from blue_frogs.models.model_b_detector import FrogDetector
 
         det_path = str(args.detector_checkpoint) if args.detector_checkpoint else None
         detector = FrogDetector(model_path=det_path)
         logger.info("Loaded FrogDetector for Model B")
 
-    # Run streaming inference
-    predictions_path = run_streaming_inference(
-        model=model,
-        model_name=args.model,
-        checkpoint_path=str(args.checkpoint),
+    # Load calibration if provided
+    calibration = None
+    if args.calibration_file:
+        import json
+        with open(args.calibration_file) as f:
+            calibration = json.load(f)
+        logger.info("Loaded calibration from %s", args.calibration_file)
+        for name, cal in calibration.items():
+            logger.info("  %s: T=%.3f, threshold=%.4f",
+                        name, cal.get("temperature", 1.0), cal.get("threshold", 0.5))
+
+    # Run streaming multi-model inference
+    predictions_paths = run_streaming_inference_multi(
+        models=models,
         threshold=args.threshold,
-        model_version=args.model_version,
         obs_per_batch=args.obs_per_batch,
         inference_batch_size=args.inference_batch_size,
         output_dir=args.output_dir,
@@ -133,21 +161,25 @@ def main() -> None:
         max_batches=args.max_batches,
         detector=detector,
         num_workers=args.num_workers,
+        save_flagged=args.save_flagged,
+        calibration=calibration,
     )
 
-    # Generate flagged predictions summary
-    logger.info("Predictions saved to %s", predictions_path)
-    if predictions_path.exists():
-        all_preds = pd.read_csv(predictions_path)
-        flagged = filter_flagged_predictions(all_preds, args.threshold)
-        flagged_path = predictions_path.parent / f"flagged_{args.model_version}.csv"
-        flagged.to_csv(flagged_path, index=False)
-        logger.info(
-            "Flagged %d / %d photos (%.2f%%) → %s",
-            len(flagged), len(all_preds),
-            100 * len(flagged) / max(len(all_preds), 1),
-            flagged_path,
-        )
+    # Generate flagged predictions summary per model
+    for model_name, pred_path in predictions_paths.items():
+        if pred_path.exists():
+            all_preds = pd.read_csv(pred_path)
+            cal = (calibration or {}).get(model_name, {})
+            flag_thresh = cal.get("threshold", args.threshold)
+            flagged = filter_flagged_predictions(all_preds, flag_thresh)
+            flagged_path = pred_path.parent / f"flagged_{model_name}_v1.csv"
+            flagged.to_csv(flagged_path, index=False)
+            logger.info(
+                "%s: Flagged %d / %d photos (%.2f%%) at threshold %.4f → %s",
+                model_name, len(flagged), len(all_preds),
+                100 * len(flagged) / max(len(all_preds), 1),
+                flag_thresh, flagged_path,
+            )
 
 
 if __name__ == "__main__":

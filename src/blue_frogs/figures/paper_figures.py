@@ -5,7 +5,7 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from sklearn.metrics import precision_recall_curve, roc_curve
+from sklearn.metrics import average_precision_score, precision_recall_curve, roc_curve
 
 matplotlib.rcParams.update({
     "font.size": 12,
@@ -28,7 +28,7 @@ def plot_precision_recall_comparison(
 
     for name, scores in model_scores.items():
         precision, recall, _ = precision_recall_curve(y_true, scores)
-        auprc = np.trapz(precision, recall)
+        auprc = average_precision_score(y_true, scores)
         ax.plot(
             recall, precision,
             color=colors.get(name, "gray"),

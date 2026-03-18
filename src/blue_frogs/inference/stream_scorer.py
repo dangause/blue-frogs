@@ -188,8 +188,13 @@ def score_batch_model_b(
     model_version: str = "unknown",
     batch_size: int = 64,
     num_workers: int = 4,
+    temperature: float = 1.0,
 ) -> pd.DataFrame:
-    """Score images with a FusionClassifier that needs (images, color_features)."""
+    """Score images with a FusionClassifier that needs (images, color_features).
+
+    Args:
+        temperature: Temperature scaling parameter for calibrated probabilities.
+    """
     model.eval()
     device = next(model.parameters()).device
 
@@ -207,8 +212,8 @@ def score_batch_model_b(
         bs = images.size(0)
         batch_cf = cf_tensor[idx : idx + bs].to(device)
         images = images.to(device)
-        logits = model(images, batch_cf)
-        probs = torch.sigmoid(logits.squeeze(-1)).cpu().numpy()
+        logits = model(images, batch_cf).squeeze(-1)
+        probs = torch.sigmoid(logits / temperature).cpu().numpy()
 
         for prob in probs:
             entry = metadata[idx]
@@ -254,6 +259,7 @@ def run_streaming_inference(
     max_batches: int | None = None,
     detector=None,
     num_workers: int = 4,
+    save_flagged: bool = False,
 ) -> Path:
     """Streaming inference over the full iNat Anura corpus.
 
@@ -392,20 +398,34 @@ def run_streaming_inference(
             shutil.rmtree(batch_image_dir, ignore_errors=True)
             raise
 
-        # 6. Append predictions to CSV
+        # 6. Save flagged images before cleanup
+        if save_flagged:
+            flagged_dir = output_dir / "flagged_images"
+            flagged_dir.mkdir(parents=True, exist_ok=True)
+            for _, row in predictions.iterrows():
+                if row["prediction_score"] >= threshold:
+                    obs_id = row["observation_id"]
+                    photo_id = row["photo_id"]
+                    score = row["prediction_score"]
+                    src = batch_image_dir / str(obs_id) / f"{photo_id}.jpg"
+                    if src.exists():
+                        dst = flagged_dir / f"{obs_id}_{photo_id}_score{score:.3f}.jpg"
+                        shutil.copy2(src, dst)
+
+        # 7. Append predictions to CSV
         append_predictions(predictions, predictions_path)
 
-        # 7. Update + save state (atomic)
+        # 8. Update + save state (atomic)
         state.last_id_above = max(o["id"] for o in observations)
         state.total_observations += len(observations)
         state.total_photos_scored += len(predictions)
         state.batches_completed += 1
         save_state(state_file, state)
 
-        # 8. Delete batch images
+        # 9. Delete batch images
         shutil.rmtree(batch_image_dir, ignore_errors=True)
 
-        # 9. Log progress
+        # 10. Log progress
         logger.info(
             "Batch %d complete: %d photos scored | cumulative: %d obs, %d photos",
             state.batches_completed,
@@ -423,3 +443,222 @@ def run_streaming_inference(
         state.total_photos_scored,
     )
     return predictions_path
+
+
+# ---------------------------------------------------------------------------
+# Multi-model streaming loop
+# ---------------------------------------------------------------------------
+
+def run_streaming_inference_multi(
+    models: dict,
+    threshold: float = 0.5,
+    obs_per_batch: int = 1000,
+    inference_batch_size: int = 64,
+    output_dir: Path = Path("results/streaming"),
+    state_file: Path | None = None,
+    tmp_dir: Path | None = None,
+    max_workers: int = 8,
+    max_batches: int | None = None,
+    detector=None,
+    num_workers: int = 4,
+    save_flagged: bool = False,
+    calibration: dict | None = None,
+) -> dict[str, Path]:
+    """Streaming inference with multiple models — download once, score N times.
+
+    Model B must be scored last because YOLO preprocessing modifies images
+    in-place (crops overwrite originals).
+
+    Args:
+        calibration: Optional dict from calibration.json. Per-model keys with
+            'temperature' and 'threshold' values for calibrated scoring.
+
+    Returns dict mapping model_name → predictions CSV path.
+    """
+    from blue_frogs.inference.batch_scorer import run_batch_inference
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if state_file is None:
+        state_file = output_dir / "state.json"
+    state_file = Path(state_file)
+
+    if tmp_dir is None:
+        tmp_dir = Path(tempfile.gettempdir()) / "blue_frogs_stream"
+    tmp_dir = Path(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    model_names = list(models.keys())
+    predictions_paths = {
+        name: output_dir / f"predictions_{name}_v1.csv" for name in model_names
+    }
+
+    state = load_state(state_file)
+    state.model = ",".join(model_names)
+
+    logger.info(
+        "Starting multi-model streaming: models=%s, resume_from_id=%d, "
+        "batches_done=%d",
+        model_names, state.last_id_above, state.batches_completed,
+    )
+
+    # Score non-B models first (they use original images), then B last
+    non_b_models = [n for n in model_names if n != "model_b"]
+    has_model_b = "model_b" in model_names
+
+    batch_num = 0
+    while True:
+        if max_batches is not None and batch_num >= max_batches:
+            logger.info("Reached max_batches=%d, stopping.", max_batches)
+            break
+
+        # 1. Fetch observations
+        logger.info(
+            "Batch %d: fetching observations (id_above=%d)...",
+            state.batches_completed + 1, state.last_id_above,
+        )
+        observations = fetch_observation_batch(
+            id_above=state.last_id_above,
+            target_count=obs_per_batch,
+        )
+        if not observations:
+            logger.info("No more observations. Corpus complete.")
+            break
+
+        # 2. Build download manifest
+        batch_image_dir = tmp_dir / f"batch_{state.batches_completed + 1}"
+        batch_image_dir.mkdir(parents=True, exist_ok=True)
+        manifest = build_download_manifest(observations, batch_image_dir)
+
+        if not manifest:
+            state.last_id_above = max(o["id"] for o in observations)
+            state.total_observations += len(observations)
+            save_state(state_file, state)
+            batch_num += 1
+            continue
+
+        # 3. Download images
+        logger.info("Downloading %d images...", len(manifest))
+        dl_stats = download_batch(manifest, max_workers=max_workers)
+        logger.info(
+            "Download stats: success=%d, failed=%d, skipped=%d",
+            dl_stats["success"], dl_stats["failed"], dl_stats["skipped"],
+        )
+
+        available_manifest = [
+            e for e in manifest if Path(e["save_path"]).exists()
+        ]
+        if not available_manifest:
+            shutil.rmtree(batch_image_dir, ignore_errors=True)
+            state.last_id_above = max(o["id"] for o in observations)
+            state.total_observations += len(observations)
+            save_state(state_file, state)
+            batch_num += 1
+            continue
+
+        metadata = build_scoring_metadata(available_manifest)
+        batch_predictions = {}
+
+        # 4. Score non-B models first (original images)
+        for model_name in non_b_models:
+            cal = (calibration or {}).get(model_name, {})
+            model_temp = cal.get("temperature", 1.0)
+            model_thresh = cal.get("threshold", threshold)
+            logger.info("Scoring %d images with %s (T=%.3f, thresh=%.4f)...",
+                        len(metadata), model_name, model_temp, model_thresh)
+            try:
+                preds = run_batch_inference(
+                    model=models[model_name],
+                    metadata=metadata,
+                    image_dir=batch_image_dir,
+                    threshold=model_thresh,
+                    model_version=f"{model_name}_v1",
+                    batch_size=inference_batch_size,
+                    num_workers=num_workers,
+                    temperature=model_temp,
+                )
+                batch_predictions[model_name] = preds
+            except Exception:
+                logger.exception("Scoring with %s failed", model_name)
+
+        # 5. Score Model B last (YOLO crop modifies images in-place)
+        if has_model_b and detector is not None:
+            cal_b = (calibration or {}).get("model_b", {})
+            b_temp = cal_b.get("temperature", 1.0)
+            b_thresh = cal_b.get("threshold", threshold)
+            logger.info("Scoring %d images with model_b (T=%.3f, thresh=%.4f)...",
+                        len(metadata), b_temp, b_thresh)
+            try:
+                color_features = preprocess_model_b(
+                    available_manifest, batch_image_dir, detector,
+                )
+                preds = score_batch_model_b(
+                    model=models["model_b"],
+                    metadata=metadata,
+                    color_features=color_features,
+                    image_dir=batch_image_dir,
+                    threshold=b_thresh,
+                    model_version="model_b_v1",
+                    batch_size=inference_batch_size,
+                    num_workers=num_workers,
+                    temperature=b_temp,
+                )
+                batch_predictions["model_b"] = preds
+            except Exception:
+                logger.exception("Scoring with model_b failed")
+
+        # 6. Save flagged images (any model flagged → save)
+        if save_flagged and batch_predictions:
+            flagged_dir = output_dir / "flagged_images"
+            flagged_dir.mkdir(parents=True, exist_ok=True)
+            saved_ids = set()
+            for model_name, preds in batch_predictions.items():
+                cal_m = (calibration or {}).get(model_name, {})
+                flag_thresh = cal_m.get("threshold", threshold)
+                for _, row in preds.iterrows():
+                    if row["prediction_score"] >= flag_thresh:
+                        obs_id = row["observation_id"]
+                        photo_id = row["photo_id"]
+                        key = (obs_id, photo_id)
+                        if key in saved_ids:
+                            continue
+                        saved_ids.add(key)
+                        score = row["prediction_score"]
+                        src = batch_image_dir / str(obs_id) / f"{photo_id}.jpg"
+                        if src.exists():
+                            dst = flagged_dir / f"{obs_id}_{photo_id}_{model_name}_score{score:.3f}.jpg"
+                            shutil.copy2(src, dst)
+
+        # 7. Append predictions per model
+        for model_name, preds in batch_predictions.items():
+            append_predictions(preds, predictions_paths[model_name])
+
+        # 8. Update state
+        n_scored = max(len(p) for p in batch_predictions.values()) if batch_predictions else 0
+        state.last_id_above = max(o["id"] for o in observations)
+        state.total_observations += len(observations)
+        state.total_photos_scored += n_scored
+        state.batches_completed += 1
+        save_state(state_file, state)
+
+        # 9. Delete batch images
+        shutil.rmtree(batch_image_dir, ignore_errors=True)
+
+        # 10. Log progress
+        model_counts = {n: len(p) for n, p in batch_predictions.items()}
+        logger.info(
+            "Batch %d complete: %s | cumulative: %d obs, %d photos",
+            state.batches_completed, model_counts,
+            state.total_observations, state.total_photos_scored,
+        )
+
+        batch_num += 1
+
+    logger.info(
+        "Multi-model streaming finished: %d batches, %d observations, %d photos",
+        state.batches_completed,
+        state.total_observations,
+        state.total_photos_scored,
+    )
+    return predictions_paths

@@ -1,14 +1,12 @@
-# GPU training image for HPC (Apptainer-compatible)
+# GPU training image — supports both x86_64 and ARM64 (Jetson/Grace).
 # Build: docker build -f Dockerfile.gpu -t blue-frogs-gpu .
-# Push:  docker push dangause/blue-frogs-gpu:latest
-# Pull on HPC: apptainer pull ~/containers/blue-frogs-gpu.sif docker://dangause/blue-frogs-gpu:latest
+#
+# NGC PyTorch images include CUDA, cuDNN, and NCCL pre-installed.
+# See: https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch
 
-# --- Build stage ---
-FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime AS builder
+FROM nvcr.io/nvidia/pytorch:24.01-py3
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    git \
     libglib2.0-0 \
     libgl1 \
     && rm -rf /var/lib/apt/lists/*
@@ -20,22 +18,7 @@ COPY src/ src/
 # Install project with all extras (bioclip for Model C, yolo for Model B)
 RUN pip install --no-cache-dir ".[bioclip,yolo]"
 
-# --- Runtime stage ---
-FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libglib2.0-0 \
-    libgl1 \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-# Copy installed packages from builder
-COPY --from=builder /opt/conda/lib/python3.10/site-packages /opt/conda/lib/python3.10/site-packages
-COPY --from=builder /opt/conda/bin /opt/conda/bin
-
-# Copy project files needed at runtime
-COPY src/ src/
+# Copy remaining project files
 COPY configs/ configs/
 COPY scripts/ scripts/
 

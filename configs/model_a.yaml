@@ -5,16 +5,24 @@ model:
   freeze_backbone: false
 
 training:
-  loss_type: weighted_bce
-  pos_weight: 20.0
-  optimizer: sgd
-  learning_rate: 0.001
-  weight_decay: 0.0
+  loss_type: focal
+  pos_weight: 1.0
+  optimizer: adamw
+  learning_rate: 0.0003
+  weight_decay: 0.01
   max_epochs: 80
   batch_size: 32
   early_stopping_patience: 10
   early_stopping_monitor: val/auprc
   early_stopping_mode: max
+
+linear_probe:
+  max_epochs: 10
+  learning_rate: 0.01
+
+finetune:
+  max_epochs: 80
+  batch_size: 32
 
 data:
   image_size: 384
