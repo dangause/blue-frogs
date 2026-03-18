@@ -314,6 +314,9 @@ def save_training_metadata(
     train_labels = [m["label"] for m in train_meta]
     val_labels = [m["label"] for m in val_meta]
 
+    # Compute the actual seed used for this fold
+    fold_seed = RANDOM_SEED + fold
+
     metadata = {
         "model_name": model_name,
         "fold": fold,
@@ -322,6 +325,13 @@ def save_training_metadata(
             "commit": git_commit,
             "branch": git_branch,
             "dirty": git_dirty,
+        },
+        "random_seeds": {
+            "base_seed": RANDOM_SEED,
+            "fold_seed": fold_seed,
+            "numpy_seed": fold_seed,
+            "torch_seed": fold_seed,
+            "cuda_seed": fold_seed if torch.cuda.is_available() else None,
         },
         "config": config,
         "data_stats": {
