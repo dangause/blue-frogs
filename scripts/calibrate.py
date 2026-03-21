@@ -201,7 +201,7 @@ def main():
 
     output_path = args.output or args.results_dir / "calibration.json"
 
-    model_names = ["model_a", "model_b", "model_c"]
+    model_names = ["model_a", "model_b", "model_c", "model_d"]
     calibration_results = {}
 
     for model_name in model_names:
