@@ -11,6 +11,7 @@ from blue_frogs.inference.batch_scorer import run_batch_inference, filter_flagge
 from blue_frogs.models.model_a import EfficientNetClassifier
 from blue_frogs.models.model_b_classifier import FusionClassifier
 from blue_frogs.models.model_c import FoundationModelClassifier
+from blue_frogs.models.model_d import DINOv3Classifier
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ MODEL_CLASSES = {
     "model_a": EfficientNetClassifier,
     "model_b": FusionClassifier,
     "model_c": FoundationModelClassifier,
+    "model_d": DINOv3Classifier,
 }
 
 
