@@ -1,0 +1,32 @@
+# GPU training image — supports both x86_64 and ARM64 (Jetson/Grace).
+# Build: docker build -f Dockerfile.gpu -t blue-frogs-gpu .
+#
+# NGC PyTorch images include CUDA, cuDNN, and NCCL pre-installed.
+# See: https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch
+
+FROM nvcr.io/nvidia/pytorch:24.01-py3
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml .
+COPY src/ src/
+
+# Install project with all extras (bioclip for Model C, yolo for Model B)
+RUN pip install --no-cache-dir ".[bioclip,yolo]"
+
+# Copy remaining project files
+COPY configs/ configs/
+COPY scripts/ scripts/
+
+# Pre-download YOLOv8m weights for Model B (avoids runtime download)
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8m.pt')"
+
+# Data and results are bind-mounted at runtime
+VOLUME ["/app/data", "/app/results"]
+
+# No ENTRYPOINT — calls python directly:
+#   docker run --gpus all -v data:/app/data blue-frogs-gpu python scripts/train.py ...

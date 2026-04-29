@@ -205,3 +205,26 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Worktrees
+.worktrees/
+
+# Claude Code
+CLAUDE.md
+
+# Project data (large files, not in git)
+/data/
+/models/
+/results/
+/figures/
+wandb/
+*.ckpt
+*.pth
+
+# YOLO / model weights
+*.pt
+yolov8*.pt
+
+# Cache files
+*.sqlite
+http_cache*

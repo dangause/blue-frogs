@@ -1,0 +1,36 @@
+detector:
+  model: yolov8m.pt
+  conf_threshold: 0.5
+  padding_fraction: 0.1
+
+classifier:
+  backbone: tf_efficientnetv2_s
+  pretrained: true
+  color_feature_dim: 30
+  fusion_hidden: 256
+  dropout: 0.3
+
+training:
+  loss_type: focal
+  pos_weight: 1.0
+  optimizer: adamw
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  max_epochs: 80
+  batch_size: 32
+  early_stopping_patience: 10
+  early_stopping_monitor: val/auprc
+  early_stopping_mode: max
+
+linear_probe:
+  max_epochs: 10
+  learning_rate: 0.01
+
+finetune:
+  max_epochs: 80
+  batch_size: 32
+
+data:
+  image_size: 384
+  n_folds: 5
+  seed: 42

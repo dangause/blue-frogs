@@ -1,0 +1,14 @@
+name: blue-frogs
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch>=2.1
+  - torchvision>=0.16
+  - pytorch-cuda=12.1
+  - pip
+  - pip:
+    - -e ".[dev,bioclip,yolo]"
