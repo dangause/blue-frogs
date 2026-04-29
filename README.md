@@ -6,10 +6,10 @@ Computer vision pipeline for detecting **axanthism** (blue coloration caused by 
 
 | Model | Architecture | Approach |
 |-------|-------------|----------|
-| **A** | EfficientNetV2-S ensemble | 5-fold cross-validated CNN with weighted BCE loss |
-| **B** | YOLOv8 detector + CNN-LAB fusion | Two-stage: detect frog crop, then classify with explicit LAB color features |
-| **C** | DINOv2 / BioCLIP | Foundation model fine-tuning with linear probe warmup |
-| **D** | DINOv3 ViT-L/16 | Larger foundation model (300M params) via HuggingFace |
+| **A** | EfficientNetV2-S | Standard image classifier trained from scratch |
+| **B** | YOLOv8 + CNN-LAB fusion | Detects the frog first, then classifies using image + color features |
+| **C** | DINOv2 (86M params) | Pre-trained vision model fine-tuned for axanthism -- **best performer** |
+| **D** | DINOv3 (300M params) | Larger pre-trained model; did not improve over Model C |
 
 ## Project Structure
 
@@ -159,12 +159,12 @@ Augmentations include standard transforms with **hue constrained to +/-5 degrees
 
 ## Evaluation
 
-Primary metrics chosen for extreme class imbalance (~0.09% prevalence):
+Primary metrics chosen for extreme class imbalance (~0.09% prevalence in the wild):
 
-- **AUPRC** (primary) - Area Under Precision-Recall Curve
-- **AUROC** - Area Under ROC Curve
-- **F1** at optimal threshold (per fold)
-- **Precision @ 95% recall** / **Recall @ 95% precision**
+- **AUPRC** (primary) - overall detection quality across all confidence thresholds (higher = better)
+- **AUROC** - similar measure, less sensitive to class imbalance
+- **F1** - balance between catching axanthic frogs and not flagging normal ones (higher = better)
+- **Precision @ 95% recall** / **Recall @ 95% precision** - operational trade-off metrics
 
 All metrics include bootstrap confidence intervals (1000 resamples). Model comparison uses McNemar's test for statistical significance.
 
@@ -198,7 +198,7 @@ Smoke test: 652 images, 3 epochs, single fold, CPU.
 
 Two-stage training (linear probe + fine-tune), fold 0, YOLO-cropped images with pre-computed LAB features.
 
-### Model C (DINOv2-Base) -- Best
+### Model C (DINOv2-Base) -- Best Overall
 
 | Metric | Value |
 |--------|-------|
@@ -206,7 +206,7 @@ Two-stage training (linear probe + fine-tune), fold 0, YOLO-cropped images with 
 | AUPRC | 0.994 +/- 0.003 |
 | F1 | 0.952 +/- 0.008 |
 
-5-fold cross-validation, DINOv2 ViT-B/14 (86M params), two-stage training.
+5-fold cross-validation. Recommended for production screening of iNaturalist images.
 
 ### Model D (DINOv3 ViT-L/16)
 
@@ -216,7 +216,7 @@ Two-stage training (linear probe + fine-tune), fold 0, YOLO-cropped images with 
 | AUPRC | 0.992 +/- 0.002 |
 | F1 | 0.948 +/- 0.006 |
 
-5-fold cross-validation, DINOv3 ViT-L/16 (300M params), two-stage training. See [docs/findings-model-d.md](docs/findings-model-d.md) for detailed analysis.
+5-fold cross-validation. Larger model (300M vs 86M parameters) that did not improve over Model C. See [findings writeup](docs/findings-model-d.md) for why bigger wasn't better and recommendations for next steps.
 
 ## Design Documents
 

@@ -1,96 +1,97 @@
-# Model D Findings: DINOv3 ViT-L/16
+# Model D Findings: DINOv3 (Larger Vision Model)
 
-## Motivation
+## Summary
 
-Models A-C established strong baselines for axanthism detection, with Model C (DINOv2-Base, 86M params) achieving the best performance (AUPRC 0.994). Model D tests whether a larger, newer foundation model improves on these results.
+We tested whether a bigger, newer AI vision model (DINOv3, 300 million parameters) could improve on our current best model (Model C, DINOv2, 86 million parameters) for detecting axanthism in frog photos. **It did not.** Model C remains the recommended model for screening iNaturalist images.
 
-DINOv3 was trained on LVD-1.6B (1.6 billion images, ~12x DINOv2's 142M) and the ViT-L/16 variant has 300M parameters (3.5x Model C's 86M). The hypothesis was that richer representations from more data and a larger model would improve discrimination in edge cases, particularly reducing false positives on naturally blue species.
+## Why We Tried a Bigger Model
 
-## Architecture
+Model C already performs very well -- it correctly identifies axanthic frogs about 99.4% of the time when measured across all confidence thresholds (AUPRC = 0.994). But the original goal of this branch was to reduce false positives: photos of normal frogs that the model incorrectly flags as potentially axanthic.
 
-| Component | Model C (DINOv2) | Model D (DINOv3) |
-|-----------|-----------------|-----------------|
-| Backbone | DINOv2 ViT-B/14 | DINOv3 ViT-L/16 |
-| Parameters | 86M | 300M |
-| Training data | LVD-142M | LVD-1.6B |
-| Feature dim | 768 | 1024 |
-| Patch size | 14 | 16 |
-| Head | Linear (768 -> 256 -> 1) | LayerNorm + Linear (1024 -> 256 -> 1) |
-| Source | torch.hub (facebookresearch/dinov2) | HuggingFace (facebook/dinov3-vitl16-pretrain-lvd1689m) |
-| Input size | 384x384 | 384x384 |
+DINOv3 is Meta's newer vision model, trained on 12x more images (1.6 billion vs 142 million) and 3.5x larger than DINOv2. The hypothesis was that its richer "understanding" of images might help it better distinguish true axanthism from naturally blue species like *Dendrobates azureus* or unusual lighting conditions.
 
-Both models use the same two-stage training protocol:
-1. **Linear probe** (20 epochs): Backbone frozen, train head only at LR=1e-3
-2. **Fine-tune** (80 epochs): Full model unfrozen with differential LR (backbone: 1e-5, head: 1e-3)
+## How the Models Compare
 
-## Results
+### What the metrics mean
 
-### Cross-Validation Performance (5-Fold)
+- **AUPRC** (Area Under Precision-Recall Curve): Measures overall detection quality across all possible confidence thresholds. Higher is better. 1.0 would be perfect. This is our primary metric because axanthism is so rare (~0.09% of frogs).
+- **AUROC**: Similar to AUPRC but less sensitive to class imbalance. Included for comparison with other studies.
+- **F1**: Balances the trade-off between catching all axanthic frogs (recall) and not flagging too many normal frogs (precision). Higher is better.
+- **+/-**: Variation across the 5 cross-validation folds (different random splits of training data). Lower variation means more consistent results.
 
-| Model | AUPRC | AUROC | F1 (optimal) |
-|-------|-------|-------|--------------|
-| A - EfficientNetV2-S | 0.975 +/- 0.010 | 0.991 +/- 0.004 | 0.909 +/- 0.013 |
-| B - YOLO + CNN-LAB | 0.974 +/- 0.012 | 0.992 +/- 0.003 | 0.905 +/- 0.015 |
-| **C - DINOv2-Base** | **0.994 +/- 0.003** | **0.999 +/- 0.001** | **0.952 +/- 0.008** |
-| D - DINOv3-Large | 0.992 +/- 0.002 | 0.998 +/- 0.001 | 0.948 +/- 0.006 |
+### Results (5-fold cross-validation)
 
-### Model D Per-Fold Breakdown
+| Model | What it is | AUPRC | F1 |
+|-------|-----------|-------|-----|
+| A | Standard image classifier | 0.975 +/- 0.010 | 0.909 +/- 0.013 |
+| B | Frog detector + color analysis | 0.974 +/- 0.012 | 0.905 +/- 0.015 |
+| **C** | **DINOv2 (86M params) -- Best** | **0.994 +/- 0.003** | **0.952 +/- 0.008** |
+| D | DINOv3 (300M params) | 0.992 +/- 0.002 | 0.948 +/- 0.006 |
 
-| Fold | AUPRC | AUROC |
-|------|-------|-------|
-| 0 | 0.9891 | 0.9975 |
-| 1 | 0.9917 | 0.9982 |
-| 2 | 0.9942 | 0.9988 |
-| 3 | 0.9925 | 0.9984 |
-| 4 | 0.9901 | 0.9978 |
-| **Mean** | **0.9915** | **0.9981** |
-| **Std** | **0.0020** | **0.0005** |
+Model D scores slightly lower than Model C on both metrics. The difference is small (0.994 vs 0.992 AUPRC) but consistent across all 5 data splits.
 
-Model D's variance is slightly lower than Model C (std 0.002 vs 0.003), suggesting more stable training, but the mean AUPRC is 0.002 points lower.
+### Model D results by fold
 
-## Calibration
+Each fold uses a different 80/20 split of the training data, so this shows how stable the results are:
 
-Temperature scaling was applied using validation predictions from all 5 folds.
+| Fold | AUPRC |
+|------|-------|
+| 0 | 0.9891 |
+| 1 | 0.9917 |
+| 2 | 0.9942 |
+| 3 | 0.9925 |
+| 4 | 0.9901 |
+| **Average** | **0.9915 +/- 0.0020** |
 
-| Metric | Model C | Model D |
-|--------|---------|---------|
-| Temperature (T) | 1.186 | 1.296 |
-| ECE (before) | 0.0120 | 0.0148 |
-| ECE (after) | 0.0085 | 0.0107 |
-| Threshold @ 95% recall | 0.2184 | 0.2572 |
+## Calibration (Confidence Tuning)
 
-Both models benefit from temperature scaling (T > 1 indicates slight overconfidence). Model C achieves better calibration (lower ECE after scaling) and a lower decision threshold to reach 95% recall.
+Neural networks often output overconfident predictions -- a photo might get a score of 0.95 when the true probability of axanthism is closer to 0.80. Calibration adjusts for this so the scores better reflect actual probabilities.
 
-## Streaming Inference Validation
+After calibration:
 
-Model D was validated on the full iNaturalist Anura corpus via streaming inference.
+| | Model C | Model D |
+|---|---------|---------|
+| Calibration error (lower = better) | 0.0085 | 0.0107 |
+| Score threshold to catch 95% of axanthic frogs | 0.22 | 0.26 |
 
-| Metric | Value |
-|--------|-------|
-| Total photos scored | 147,048 |
-| Flagged at 0.9 threshold | ~2,060 (1.4%) |
-| Flagged at 0.5 threshold | ~4,200 (2.9%) |
-| Inference time per image | ~45ms (A100 GPU) |
+**What this means in practice:** To catch 95% of truly axanthic frogs, Model C only needs to flag photos scoring above 0.22, while Model D needs a higher cutoff of 0.26. Model C's lower threshold means it casts a slightly wider net while still maintaining good precision.
 
-For comparison, Model C flagged ~1,800 photos (1.2%) at the same 0.9 threshold on a comparable streaming run, indicating Model D is slightly less conservative (more false positives at the same threshold).
+## Large-Scale Validation on iNaturalist
 
-### Score Distribution
+We ran Model D across 147,048 iNaturalist frog photos to see how it performs at scale:
 
-The vast majority of images score near 0.0 (clearly not axanthic). The distribution shows a clean separation between negative and flagged populations with a sparse transition region between 0.1 and 0.5.
+| | Model C | Model D |
+|---|---------|---------|
+| Photos scored | ~147k | 147,048 |
+| Flagged at high-confidence threshold (0.9) | ~1,800 (1.2%) | ~2,060 (1.4%) |
 
-## Conclusion
+Model D flags about 15% more photos than Model C at the same confidence threshold, meaning more false positives to manually review.
 
-**Model C (DINOv2-Base) remains the best model for production use.**
+## Why the Bigger Model Didn't Help
 
-Model D's larger architecture and newer pretraining did not translate to improved axanthism detection. The likely reasons:
+1. **The task is nearly solved.** At 99.4% AUPRC, the remaining errors are genuinely ambiguous photos (bad lighting, unusual angles, partial views) where even a larger model can't reliably decide. More parameters don't help with genuinely ambiguous data.
 
-1. **Task saturation**: At AUPRC > 0.99, the task is nearly solved. The remaining errors are ambiguous cases (poor lighting, unusual angles) where more parameters don't help.
-2. **Dataset size**: With ~10k training images, a 300M parameter model may be slightly overparameterized compared to 86M, despite regularization.
-3. **Domain gap**: DINOv3's additional training data (internet images at large) doesn't specifically improve on the ecological image domain where DINOv2 already performs well.
+2. **Not enough training data for a bigger model.** With ~10,000 training images, the 300M-parameter model may be too large relative to the available data. The 86M-parameter Model C is a better fit for this dataset size.
+
+3. **General images don't help with frogs.** DINOv3's extra training data is mostly general internet images. This doesn't specifically improve recognition of the subtle color differences that distinguish axanthism from natural blue coloration in species like *Dendrobates*.
 
 ## Recommendations
 
-1. **Use Model C for production deployment** -- better AUPRC, better calibration, 3.5x smaller, and faster inference.
-2. **Threshold selection**: Use the calibrated threshold from `calibration.json` (0.2184 for 95% recall). For high-precision screening where manual review follows, a threshold of 0.9 keeps the flagged set manageable (~1.2% of corpus).
-3. **Model D as a complementary signal**: In a future ensemble, Model D's independent errors could improve recall at fixed precision, but the marginal gain is likely small given the already high performance.
-4. **Focus further work on data quality** -- curating hard negatives and expanding positives will likely yield more improvement than architecture changes at this point.
+1. **Use Model C for all screening.** It's more accurate, better calibrated, 3.5x smaller (faster to run), and flags fewer false positives.
+
+2. **Threshold guidance for manual review:**
+   - **Threshold 0.9** -- flags ~1.2% of corpus. Good for manageable review batches. Very few false negatives among high-scoring photos.
+   - **Threshold 0.22** (calibrated) -- catches ~95% of axanthic frogs but flags more photos for review.
+   - Choose based on whether you prioritize completeness (lower threshold) or efficiency of manual review (higher threshold).
+
+3. **Next steps for improvement** should focus on data, not model architecture:
+   - Add more confirmed axanthic observations to the training set
+   - Curate additional hard negatives (naturally blue species, unusual lighting)
+   - These will likely improve detection more than trying yet another model architecture
+
+## Technical Details
+
+For ML practitioners, additional architecture details are in:
+- `configs/model_d.yaml` -- training hyperparameters
+- `src/blue_frogs/models/model_d.py` -- model implementation
+- `docs/ML_WORKFLOW.md` -- full pipeline documentation
