@@ -2,13 +2,14 @@
 
 Computer vision pipeline for detecting **axanthism** (blue coloration caused by loss of yellow xanthophore pigments) in frogs from iNaturalist images. Built to extend the [Womack et al. Blue Frogs Project](https://github.com/mcwomack/bluefrogs) dataset (~372 confirmed axanthic observations across 36 species) to automated, full-scale detection across the entire iNaturalist frog corpus.
 
-## Three Model Architectures
+## Four Model Architectures
 
 | Model | Architecture | Approach |
 |-------|-------------|----------|
 | **A** | EfficientNetV2-S ensemble | 5-fold cross-validated CNN with weighted BCE loss |
 | **B** | YOLOv8 detector + CNN-LAB fusion | Two-stage: detect frog crop, then classify with explicit LAB color features |
 | **C** | DINOv2 / BioCLIP | Foundation model fine-tuning with linear probe warmup |
+| **D** | DINOv3 ViT-L/16 | Larger foundation model (300M params) via HuggingFace |
 
 ## Project Structure
 
@@ -16,27 +17,30 @@ Computer vision pipeline for detecting **axanthism** (blue coloration caused by 
 blue-frogs/
 ├── src/blue_frogs/
 │   ├── config.py              # Central paths & constants
-│   ├── models/                # Model A, B, C implementations
+│   ├── models/                # Model A, B, C, D implementations
 │   ├── data/                  # Dataset, downloader, iNat API, splits
 │   ├── evaluation/            # Metrics, model comparison, Grad-CAM
 │   ├── inference/             # Batch + streaming scoring pipelines
 │   └── figures/               # Publication figure generation
 ├── scripts/                   # CLI entry points
 │   ├── train.py               # Unified training (all models)
+│   ├── calibrate.py           # Post-hoc temperature scaling
 │   ├── preprocess_crops.py    # YOLO crop + LAB pre-computation (Model B)
 │   ├── stream_inference.py    # Streaming inference over iNat corpus
 │   ├── smoke_test.py          # End-to-end integration test
 │   ├── run_inference.py       # Batch inference on full corpus
 │   ├── download_images.py     # Image download from iNaturalist
 │   ├── compare_models.py      # Statistical model comparison
-│   └── generate_figures.py    # PR curves, LAB distributions
+│   ├── generate_figures.py    # PR curves, LAB distributions
+│   └── generate_gallery.py   # HTML gallery of flagged images
 ├── configs/                   # YAML hyperparameter configs
 │   ├── model_a.yaml
 │   ├── model_b.yaml
 │   ├── model_c.yaml
+│   ├── model_d.yaml
 │   └── smoke_test.yaml
-├── tests/                     # 38 unit/integration tests
-├── docs/plans/                # Design documents
+├── tests/                     # 58 unit/integration tests
+├── docs/                      # Design documents & findings
 ├── Dockerfile                 # Multi-stage CPU build for smoke tests
 ├── pyproject.toml             # Package metadata & dependencies
 └── environment.yml            # Conda environment (CUDA 12.1)
@@ -59,6 +63,14 @@ pip install -e ".[dev]"
 # Optional extras
 pip install -e ".[bioclip]"   # BioCLIP backbone for Model C
 pip install -e ".[yolo]"      # YOLOv8 detector for Model B
+```
+
+### uv (fast alternative)
+
+```bash
+uv sync --extra dev
+uv sync --extra bioclip   # BioCLIP backbone for Model C
+uv sync --extra yolo       # YOLOv8 detector for Model B
 ```
 
 **Requirements:** Python 3.11+, PyTorch 2.1+
@@ -92,11 +104,19 @@ python scripts/train.py --config configs/model_b.yaml --model model_b \
 ### Run streaming inference
 
 ```bash
+# Single model
 python scripts/stream_inference.py \
-  --model model_b \
-  --checkpoint models/model_b/fold_0/finetune/best-val/auprc=0.9766.ckpt \
+  --models model_b \
+  --checkpoints models/model_b/fold_0/finetune/best-val/auprc=0.9766.ckpt \
   --detector-checkpoint models/model_b_detector/frog_detector.pt \
   --obs-per-batch 200 --max-batches 5
+
+# Multi-model with calibration
+python scripts/stream_inference.py \
+  --models model_c model_d \
+  --checkpoints models/model_c/fold_0/best.ckpt models/model_d/fold_0/best.ckpt \
+  --calibration-file results/calibration.json \
+  --obs-per-batch 500 --save-flagged
 ```
 
 ### GPU training (Docker, full pipeline)
@@ -105,7 +125,7 @@ python scripts/stream_inference.py \
 # Build the GPU image
 docker build -f Dockerfile.gpu -t blue-frogs-gpu .
 
-# Train all 3 models (5 folds each) + aggregate results
+# Train all 4 models (5 folds each) + aggregate results
 bash scripts/docker/train_all.sh
 
 # Run streaming inference on the full iNat corpus
@@ -151,7 +171,7 @@ All metrics include bootstrap confidence intervals (1000 resamples). Model compa
 ## Tests
 
 ```bash
-pytest                    # Run all 38 tests
+pytest                    # Run all 58 tests
 pytest tests/ --cov       # With coverage
 ruff check src/ tests/    # Lint
 ```
@@ -177,6 +197,26 @@ Smoke test: 652 images, 3 epochs, single fold, CPU.
 | F1 | 0.892 |
 
 Two-stage training (linear probe + fine-tune), fold 0, YOLO-cropped images with pre-computed LAB features.
+
+### Model C (DINOv2-Base) -- Best
+
+| Metric | Value |
+|--------|-------|
+| AUROC | 0.999 +/- 0.001 |
+| AUPRC | 0.994 +/- 0.003 |
+| F1 | 0.952 +/- 0.008 |
+
+5-fold cross-validation, DINOv2 ViT-B/14 (86M params), two-stage training.
+
+### Model D (DINOv3 ViT-L/16)
+
+| Metric | Value |
+|--------|-------|
+| AUROC | 0.998 +/- 0.001 |
+| AUPRC | 0.992 +/- 0.002 |
+| F1 | 0.948 +/- 0.006 |
+
+5-fold cross-validation, DINOv3 ViT-L/16 (300M params), two-stage training. See [docs/findings-model-d.md](docs/findings-model-d.md) for detailed analysis.
 
 ## Design Documents
 

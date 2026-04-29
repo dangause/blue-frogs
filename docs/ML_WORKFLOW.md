@@ -223,6 +223,49 @@ Stage 2: Fine-tune (backbone unfrozen)
 - Rich visual representations from self-supervised pretraining
 - Handles diverse image conditions well
 
+### Model D: DINOv3 Foundation Model
+
+**Architecture**: Larger self-supervised vision transformer with two-stage training
+
+```
+Stage 1: Linear Probe (backbone frozen)
+┌─────────────────────────┐
+│  DINOv3-Large (frozen)  │
+│  (300M params, ViT-L/16)│
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│  Classification Head    │
+│  LayerNorm → 1024 → 256 │
+│  → GELU → Dropout → 1  │
+└─────────────────────────┘
+
+Stage 2: Fine-tune (backbone unfrozen)
+┌─────────────────────────┐
+│  DINOv3-Large (unfrozen)│
+│  LR: 1e-5 (backbone)    │
+│  LR: 1e-3 (head)        │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│  Classification Head    │
+│  (initialized from      │
+│   Stage 1 weights)      │
+└─────────────────────────┘
+```
+
+**Config**: `configs/model_d.yaml`
+
+**Key differences from Model C**:
+- 300M vs 86M parameters (3.5x larger)
+- Trained on LVD-1.6B (12x more data than DINOv2's LVD-142M)
+- Loaded via HuggingFace Transformers (requires `HF_TOKEN` for gated models)
+- Uses focal loss instead of weighted BCE
+
+**Result**: AUPRC 0.992 -- slightly below Model C (0.994). See `docs/findings-model-d.md` for analysis.
+
 ---
 
 ## Training Pipeline
@@ -246,7 +289,7 @@ python scripts/train.py \
 bash scripts/spark/train_all.sh
 ```
 
-This trains all three models across 5 folds with:
+This trains all four models across 5 folds with:
 - Weighted BCE loss (pos_weight based on class ratio)
 - AdamW optimizer with cosine annealing
 - Early stopping on validation AUPRC
@@ -322,6 +365,10 @@ python scripts/calibrate.py \
 3. Compute calibrated probabilities: `p_calibrated = sigmoid(logit / T)`
 4. Find threshold achieving target recall (e.g., 95%)
 
+Calibration runs over all models found in `--results-dir` (model_a through model_d).
+
+**Note**: Model D requires HuggingFace authentication. Set `HF_TOKEN` in your environment or run `huggingface-cli login` before calibration if DINOv3 weights need to be downloaded.
+
 ### Output
 
 ```json
@@ -332,6 +379,14 @@ python scripts/calibrate.py \
     "ece_before": 0.089,
     "ece_after": 0.032,
     "precision_at_threshold": 0.868,
+    "recall_at_threshold": 0.950
+  },
+  "model_d": {
+    "temperature": 1.296,
+    "threshold": 0.2572,
+    "ece_before": 0.0148,
+    "ece_after": 0.0107,
+    "precision_at_threshold": 0.851,
     "recall_at_threshold": 0.950
   }
 }
@@ -422,7 +477,8 @@ Outputs McNemar's test for pairwise statistical comparison.
 |-------|-------|-------|--------------|
 | EfficientNetV2-S | 0.975 ± 0.010 | 0.991 ± 0.004 | 0.909 ± 0.013 |
 | Two-Stage + LAB | 0.974 ± 0.012 | 0.992 ± 0.003 | 0.905 ± 0.015 |
-| **DINOv2** | **0.994 ± 0.003** | **0.999 ± 0.001** | **0.952 ± 0.008** |
+| **DINOv2 (Model C)** | **0.994 ± 0.003** | **0.999 ± 0.001** | **0.952 ± 0.008** |
+| DINOv3 (Model D) | 0.992 ± 0.002 | 0.998 ± 0.001 | 0.948 ± 0.006 |
 
 ---
 
@@ -554,6 +610,7 @@ python scripts/generate_supplementary.py
 | `models/model_a.py` | EfficientNetV2 classifier |
 | `models/model_b_classifier.py` | CNN-LAB fusion |
 | `models/model_c.py` | DINOv2 classifier |
+| `models/model_d.py` | DINOv3 classifier |
 | `evaluation/metrics.py` | AUPRC, threshold finding |
 | `evaluation/comparison.py` | McNemar's test |
 | `inference/stream_scorer.py` | Streaming inference |

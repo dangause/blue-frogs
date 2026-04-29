@@ -106,9 +106,28 @@ for FOLD in $(seq 0 $((N_FOLDS - 1))); do
     echo "  --- Model C | Fold ${FOLD} complete | $(date) ---"
 done
 
-# --- Step 4: Aggregate results ---
+# --- Step 4: Train Model D (5 folds) ---
 echo ""
-echo "[Step 4] Aggregating fold results..."
+echo "[Step 4] Training Model D (${N_FOLDS} folds)..."
+for FOLD in $(seq 0 $((N_FOLDS - 1))); do
+    echo "  --- Model D | Fold ${FOLD} | $(date) ---"
+    python scripts/train.py \
+        --model model_d \
+        --config configs/model_d.yaml \
+        --data-dir "$DATA_DIR" \
+        --labels-file "$DATA_DIR/labels.json" \
+        --splits-file "$DATA_DIR/splits.json" \
+        --output-dir "$RESULTS_DIR" \
+        --fold "$FOLD" \
+        --precision "$PRECISION" \
+        --wandb-offline \
+        2>&1 | tee "${LOG_DIR}/model_d_fold${FOLD}.log"
+    echo "  --- Model D | Fold ${FOLD} complete | $(date) ---"
+done
+
+# --- Step 5: Aggregate results ---
+echo ""
+echo "[Step 5] Aggregating fold results..."
 python scripts/aggregate_folds.py \
     --results-dir "$RESULTS_DIR" \
     --output-dir "$RESULTS_DIR" \

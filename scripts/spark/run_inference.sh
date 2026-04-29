@@ -5,7 +5,9 @@
 #   bash scripts/spark/run_inference.sh
 #
 # Override defaults:
-#   MODEL=model_a bash scripts/spark/run_inference.sh
+#   MODELS="model_c model_d" bash scripts/spark/run_inference.sh
+#   MODELS=model_a SAVE_FLAGGED=1 bash scripts/spark/run_inference.sh
+#   CALIBRATION_FILE=results/calibration.json bash scripts/spark/run_inference.sh
 
 set -euo pipefail
 
@@ -13,12 +15,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATA_DIR="${DATA_DIR:-${PROJECT_DIR}/data}"
 RESULTS_DIR="${RESULTS_DIR:-${PROJECT_DIR}/results}"
-MODEL="${MODEL:-model_b}"
+MODELS="${MODELS:-model_c}"
 CHECKPOINT="${CHECKPOINT:-}"
-MODEL_VERSION="${MODEL_VERSION:-${MODEL}_v1}"
+CALIBRATION_FILE="${CALIBRATION_FILE:-}"
+MODEL_VERSION="${MODEL_VERSION:-${MODELS// /_}_v1}"
 THRESHOLD="${THRESHOLD:-0.5}"
 OBS_PER_BATCH="${OBS_PER_BATCH:-1000}"
 MAX_BATCHES="${MAX_BATCHES:-}"
+SAVE_FLAGGED="${SAVE_FLAGGED:-}"
 LOG_DIR="${LOG_DIR:-${PROJECT_DIR}/logs}"
 
 mkdir -p "$RESULTS_DIR" "$LOG_DIR"
@@ -29,37 +33,55 @@ fi
 
 cd "$PROJECT_DIR"
 
-# Auto-detect best checkpoint if not specified
+# Auto-detect checkpoints if not specified
+CHECKPOINTS=""
 if [ -z "$CHECKPOINT" ]; then
-    if [ "$MODEL" = "model_b" ]; then
-        CHECKPOINT=$(find "$RESULTS_DIR/$MODEL" -path "*/finetune/best-*.ckpt" | head -1 || true)
-    fi
-    if [ -z "$CHECKPOINT" ]; then
-        CHECKPOINT=$(find "$RESULTS_DIR/$MODEL" -name "best-*.ckpt" | head -1 || true)
-    fi
-    if [ -z "$CHECKPOINT" ]; then
-        echo "ERROR: No checkpoint found for $MODEL in $RESULTS_DIR/$MODEL"
-        exit 1
-    fi
+    for MODEL in $MODELS; do
+        CKPT=""
+        if [ "$MODEL" = "model_b" ]; then
+            CKPT=$(find "$RESULTS_DIR/$MODEL" "$PROJECT_DIR/models/$MODEL" -path "*/finetune/best-*.ckpt" 2>/dev/null | head -1 || true)
+        fi
+        if [ -z "$CKPT" ]; then
+            CKPT=$(find "$RESULTS_DIR/$MODEL" "$PROJECT_DIR/models/$MODEL" -name "best-*.ckpt" 2>/dev/null | head -1 || true)
+        fi
+        if [ -z "$CKPT" ]; then
+            echo "ERROR: No checkpoint found for $MODEL in $RESULTS_DIR/$MODEL or models/$MODEL"
+            exit 1
+        fi
+        CHECKPOINTS="$CHECKPOINTS $CKPT"
+    done
+else
+    CHECKPOINTS="$CHECKPOINT"
 fi
 
 echo "================================================"
-echo "Streaming Inference: $MODEL"
+echo "Streaming Inference"
 echo "================================================"
-echo "Checkpoint: $CHECKPOINT"
+echo "Models:     $MODELS"
+echo "Checkpoints:$CHECKPOINTS"
 echo "Threshold:  $THRESHOLD"
+if [ -n "$CALIBRATION_FILE" ]; then
+    echo "Calibration: $CALIBRATION_FILE"
+fi
 echo "================================================"
 
 CMD="python scripts/stream_inference.py \
-    --model $MODEL \
-    --checkpoint $CHECKPOINT \
+    --models $MODELS \
+    --checkpoints $CHECKPOINTS \
     --threshold $THRESHOLD \
     --obs-per-batch $OBS_PER_BATCH \
-    --output-dir $RESULTS_DIR/streaming_${MODEL_VERSION} \
-    --model-version $MODEL_VERSION"
+    --output-dir $RESULTS_DIR/streaming_${MODEL_VERSION}"
 
 if [ -n "${MAX_BATCHES:-}" ]; then
     CMD="$CMD --max-batches $MAX_BATCHES"
+fi
+
+if [ -n "${CALIBRATION_FILE:-}" ]; then
+    CMD="$CMD --calibration-file $CALIBRATION_FILE"
+fi
+
+if [ -n "${SAVE_FLAGGED:-}" ]; then
+    CMD="$CMD --save-flagged"
 fi
 
 eval $CMD 2>&1 | tee "${LOG_DIR}/inference_${MODEL_VERSION}.log"
